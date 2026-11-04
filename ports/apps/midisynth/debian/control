@@ -1,0 +1,18 @@
+Source: midisynth
+Section: sound
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/MidiSynth
+
+Package: midisynth
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: MIDI synthesiser keyboard for V\OS
+ MidiSynth is an on-screen MIDI keyboard that plays through the system
+ synthesiser: pick a SoundFont, play with the mouse or a computer
+ keyboard, transpose and remap keys, follow chords, and watch the
+ oscilloscope. MIDI goes out through the V\OS MIDI kit, so external
+ ports work alongside the internal synth.

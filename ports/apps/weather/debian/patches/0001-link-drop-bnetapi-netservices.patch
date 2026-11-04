@@ -1,0 +1,23 @@
+Description: Drop -lbnetapi and -lnetservices from the link line
+ On V\OS the network kit (BNet* sockets) and netservices (BUrlRequest,
+ BUrlProtocolListener, BHttpRequest, BJson, ...) are compiled into libbe;
+ there is no separate libbnetapi or libnetservices to link against, and
+ libbe is already in LIBS. Upstream still names the two legacy
+ libraries, which fails with:
+   /usr/bin/ld: cannot find -lbnetapi: No such file or directory
+   /usr/bin/ld: cannot find -lnetservices: No such file or directory
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: V\OS port of HaikuArchives/Weather
+
+--- a/Makefile
++++ b/Makefile
+@@ -61,7 +61,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be bnetapi localestub translation netservices shared $(STDCPPLIBS)
++LIBS = be localestub translation shared $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

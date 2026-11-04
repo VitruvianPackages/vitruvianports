@@ -1,0 +1,17 @@
+Source: benettris
+Section: games
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BeNetTris
+
+Package: benettris
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: networked Tetris game for V\OS
+ BeNetTris is a falling-blocks (Tetris-style) game with network play:
+ host or join a game over TCP with the Tetrinet protocol, talk on a
+ party line and race on several fields at once. Single-player runs
+ locally, with configurable control keys and block frequencies.

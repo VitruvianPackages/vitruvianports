@@ -1,0 +1,648 @@
+Description: add top-level makefile and legacy include-prefix shims
+ Upstream runs make in bepdf/ and xpdf/ as two separate projects; the
+ vos_makefile_engine buildsystem invokes make once at the source root.
+ Add a top-level generic makefile that drives both source sets through
+ one engine invocation (viewer + bundled xpdf-derived sources merged
+ into a single link), plus voscompat/ shims: forwarding headers for the
+ legacy be/ include prefix, which the packaged headers do not ship, and
+ redirects for the two bundled header names (UTF8.h, Catalog.h) that
+ the packaged headers also ship. A locales symlink at the source root
+ points at bepdf/locales, where upstream keeps the translation
+ sources, so the buildsystem's catalog step finds them. The separate
+ columnlistview link entry is dropped because that library's classes
+ are exported by libbe here, and -std=gnu++11 is forced because the
+ bundled xpdf-derived code uses dynamic exception specifications that
+ newer dialects removed (gnu++11 is the V\OS tree default). CFLAGS
+ opens with voscompat and the packaged real header root so the legacy
+ and <os/...>/<private/...> include styles resolve to the intended
+ headers ahead of the redirect wrappers that the spec file's -I
+ ordering would otherwise pick.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/BePDF
+
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..bf88f2d
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,205 @@
++# Copyright 2026, Dario Casalinuovo. All rights reserved.
++#
++# Top-level generic makefile for the V\OS packaging build: drives the
++# viewer sources and the bundled xpdf-derived engine sources through a
++# single Makefile-Engine invocation (one object dir, one link).
++
++# The name of the binary.
++NAME = BePDF
++
++# The type of binary.
++TYPE = APP
++
++# The MIME signature; the catalogs are keyed on it.
++APP_MIME_SIG = application/x-vnd.mp-xpdf
++
++# Viewer + bundled xpdf-derived sources, merged into one link so no
++# intermediate static archive is needed.
++SRCS = \
++	bepdf/beos/AnnotAppearance.cpp \
++	bepdf/beos/AnnotWriter.cpp \
++	bepdf/beos/Annotation.cpp \
++	bepdf/beos/AnnotationRenderer.cpp \
++	bepdf/beos/AnnotationWindow.cpp \
++	bepdf/beos/AttachmentView.cpp \
++	bepdf/beos/BeFontEncoding.cpp \
++	bepdf/beos/BePDF.cpp \
++	bepdf/beos/BepdfApplication.cpp \
++	bepdf/beos/BitmapPool.cpp \
++	bepdf/beos/CachedPage.cpp \
++	bepdf/beos/DisplayCIDFonts.cpp \
++	bepdf/beos/EntryChangedMonitor.cpp \
++	bepdf/beos/FileInfoWindow.cpp \
++	bepdf/beos/FileSpec.cpp \
++	bepdf/beos/FindTextWindow.cpp \
++	bepdf/beos/History.cpp \
++	bepdf/beos/LayoutUtils.cpp \
++	bepdf/beos/OutlinesWindow.cpp \
++	bepdf/beos/PDFPrint.cpp \
++	bepdf/beos/PDFSearch.cpp \
++	bepdf/beos/PDFView.cpp \
++	bepdf/beos/PDFWindow.cpp \
++	bepdf/beos/PageCache.cpp \
++	bepdf/beos/PageLabels.cpp \
++	bepdf/beos/PageRenderer.cpp \
++	bepdf/beos/PasswordWindow.cpp \
++	bepdf/beos/PreferencesWindow.cpp \
++	bepdf/beos/PrintSettingsWindow.cpp \
++	bepdf/beos/PrintingProgressWindow.cpp \
++	bepdf/beos/SaveThread.cpp \
++	bepdf/beos/Settings.cpp \
++	bepdf/beos/StatusWindow.cpp \
++	bepdf/beos/TextConversion.cpp \
++	bepdf/beos/TraceWindow.cpp \
++	bepdf/beos/TreeParser.cpp \
++	bepdf/beos/utils/EntryMenuItem.cpp \
++	bepdf/beos/utils/ResourceLoader.cpp \
++	bepdf/beos/utils/Thread.cpp \
++	xpdf/beos/BeSplashOutputDev.cc \
++	xpdf/beos/EncodingReader.cc \
++	xpdf/beos/Init.cc \
++	xpdf/beos/GDir.cc \
++	xpdf/fofi/FoFiBase.cc \
++	xpdf/fofi/FoFiEncodings.cc \
++	xpdf/fofi/FoFiIdentifier.cc \
++	xpdf/fofi/FoFiTrueType.cc \
++	xpdf/fofi/FoFiType1.cc \
++	xpdf/fofi/FoFiType1C.cc \
++	xpdf/goo/parseargs.c \
++	xpdf/goo/FixedPoint.cc \
++	xpdf/goo/GHash.cc \
++	xpdf/goo/GList.cc \
++	xpdf/goo/GString.cc \
++	xpdf/goo/gfile.cc \
++	xpdf/goo/gmem.cc \
++	xpdf/goo/gmempp.cc \
++	xpdf/splash/Splash.cc \
++	xpdf/splash/SplashBitmap.cc \
++	xpdf/splash/SplashClip.cc \
++	xpdf/splash/SplashFTFont.cc \
++	xpdf/splash/SplashFTFontEngine.cc \
++	xpdf/splash/SplashFTFontFile.cc \
++	xpdf/splash/SplashFont.cc \
++	xpdf/splash/SplashFontEngine.cc \
++	xpdf/splash/SplashFontFile.cc \
++	xpdf/splash/SplashFontFileID.cc \
++	xpdf/splash/SplashPath.cc \
++	xpdf/splash/SplashPattern.cc \
++	xpdf/splash/SplashScreen.cc \
++	xpdf/splash/SplashState.cc \
++	xpdf/splash/SplashXPath.cc \
++	xpdf/splash/SplashXPathScanner.cc \
++	xpdf/xpdf/AcroForm.cc \
++	xpdf/xpdf/Annot.cc \
++	xpdf/xpdf/Array.cc \
++	xpdf/xpdf/BuiltinFont.cc \
++	xpdf/xpdf/BuiltinFontTables.cc \
++	xpdf/xpdf/CMap.cc \
++	xpdf/xpdf/Catalog.cc \
++	xpdf/xpdf/CharCodeToUnicode.cc \
++	xpdf/xpdf/Decrypt.cc \
++	xpdf/xpdf/Dict.cc \
++	xpdf/xpdf/DisplayState.cc \
++	xpdf/xpdf/Error.cc \
++	xpdf/xpdf/FontEncodingTables.cc \
++	xpdf/xpdf/Form.cc \
++	xpdf/xpdf/Function.cc \
++	xpdf/xpdf/Gfx.cc \
++	xpdf/xpdf/GfxFont.cc \
++	xpdf/xpdf/GfxState.cc \
++	xpdf/xpdf/GlobalParams.cc \
++	xpdf/xpdf/ImageOutputDev.cc \
++	xpdf/xpdf/JArithmeticDecoder.cc \
++	xpdf/xpdf/JBIG2Stream.cc \
++	xpdf/xpdf/JPXStream.cc \
++	xpdf/xpdf/Lexer.cc \
++	xpdf/xpdf/Link.cc \
++	xpdf/xpdf/NameToCharCode.cc \
++	xpdf/xpdf/Object.cc \
++	xpdf/xpdf/OptionalContent.cc \
++	xpdf/xpdf/Outline.cc \
++	xpdf/xpdf/OutputDev.cc \
++	xpdf/xpdf/PDFCore.cc \
++	xpdf/xpdf/PDFDoc.cc \
++	xpdf/xpdf/PDFDocEncoding.cc \
++	xpdf/xpdf/PSOutputDev.cc \
++	xpdf/xpdf/PSTokenizer.cc \
++	xpdf/xpdf/Page.cc \
++	xpdf/xpdf/Parser.cc \
++	xpdf/xpdf/PreScanOutputDev.cc \
++	xpdf/xpdf/SecurityHandler.cc \
++	xpdf/xpdf/SplashOutputDev.cc \
++	xpdf/xpdf/Stream.cc \
++	xpdf/xpdf/TextOutputDev.cc \
++	xpdf/xpdf/TextString.cc \
++	xpdf/xpdf/TileCache.cc \
++	xpdf/xpdf/TileCompositor.cc \
++	xpdf/xpdf/TileMap.cc \
++	xpdf/xpdf/UnicodeMap.cc \
++	xpdf/xpdf/UnicodeTypeTable.cc \
++	xpdf/xpdf/UTF8.cc \
++	xpdf/xpdf/XFAForm.cc \
++	xpdf/xpdf/XRef.cc \
++	xpdf/xpdf/Zoox.cc
++
++# The resource definition files to use.
++RDEFS = bepdf/beos/BePDF.rdef
++
++RSRCS =
++
++# Libraries: the legacy separate columnlistview library is part of
++# libbe here, so it is not listed.
++LIBS = shared be textencoding tracker translation localestub $(STDCPPLIBS)
++
++# Additional library search paths.
++LIBPATHS =
++
++# System include paths, as upstream lists them (the legacy be/
++# prefix and the bundled-name redirects ride on CFLAGS instead).
++SYSTEM_INCLUDE_PATHS = \
++	xpdf \
++	xpdf/beos \
++	xpdf/fofi \
++	xpdf/goo \
++	xpdf/splash \
++	xpdf/xpdf \
++	/system/develop/headers/private/interface 
++
++# Additional local include paths.
++LOCAL_INCLUDE_PATHS =
++
++OPTIMIZE := SOME
++
++LOCALES = ca cs de el en_AU en_GB en es fi fr fur hi id ja pl pt pt_BR ro ru sv th tr uk
++
++DEFINES =
++
++WARNINGS = ALL
++
++SYMBOLS :=
++
++DEBUGGER :=
++
++# voscompat first: the legacy be/ include prefix plus the redirects
++# for bundled header names that the packaged headers also ship. Then
++# the packaged real header root ahead of the redirect wrappers that
++# the spec file's -I ordering would otherwise pick for <os/...> and
++# <private/...> includes.
++CFLAGS = -Ivoscompat -I/system/develop/headers
++
++# The bundled xpdf-derived code uses dynamic exception specifications,
++# so use the C/C++ standard of the V\OS tree default.
++COMPILER_FLAGS = -std=gnu++11 -Wno-write-strings $(shell pkg-config --cflags freetype2)
++
++LINKER_FLAGS = $(shell pkg-config --libs freetype2) -lm
++
++APP_VERSION :=
++
++DRIVER_PATH =
++
++# The packaging build passes DEVEL_DIRECTORY on the command line; only
++# probe for it when that override is absent.
++ifeq ($(DEVEL_DIRECTORY),)
++DEVEL_DIRECTORY := $(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++endif
++include $(DEVEL_DIRECTORY)/etc/makefile-engine
+diff --git a/locales b/locales
+new file mode 120000
+index 0000000..8bd9788
+--- /dev/null
++++ b/locales
+@@ -0,0 +1 @@
++bepdf/locales
+\ No newline at end of file
+diff --git a/voscompat/Catalog.h b/voscompat/Catalog.h
+new file mode 100644
+index 0000000..2f2b750
+--- /dev/null
++++ b/voscompat/Catalog.h
+@@ -0,0 +1,5 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++/* The packaged headers ship their own Catalog.h and their -I paths can
++   outrank the bundled include path; redirect the bare name to the
++   bundled xpdf-derived copy the viewer calls into. */
++#include "../xpdf/xpdf/Catalog.h"
+diff --git a/voscompat/UTF8.h b/voscompat/UTF8.h
+new file mode 100644
+index 0000000..d36f8cd
+--- /dev/null
++++ b/voscompat/UTF8.h
+@@ -0,0 +1,5 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++/* The packaged headers ship their own UTF8.h and their -I paths can
++   outrank the bundled include path; redirect the bare name to the
++   bundled xpdf-derived copy the viewer calls into. */
++#include "../xpdf/xpdf/UTF8.h"
+diff --git a/voscompat/be/StorageKit.h b/voscompat/be/StorageKit.h
+new file mode 100644
+index 0000000..76a4a7c
+--- /dev/null
++++ b/voscompat/be/StorageKit.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/StorageKit.h>
+diff --git a/voscompat/be/app/Application.h b/voscompat/be/app/Application.h
+new file mode 100644
+index 0000000..a47e2d7
+--- /dev/null
++++ b/voscompat/be/app/Application.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/app/Application.h>
+diff --git a/voscompat/be/app/Clipboard.h b/voscompat/be/app/Clipboard.h
+new file mode 100644
+index 0000000..c271949
+--- /dev/null
++++ b/voscompat/be/app/Clipboard.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/app/Clipboard.h>
+diff --git a/voscompat/be/app/Cursor.h b/voscompat/be/app/Cursor.h
+new file mode 100644
+index 0000000..f990ae1
+--- /dev/null
++++ b/voscompat/be/app/Cursor.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/app/Cursor.h>
+diff --git a/voscompat/be/app/Looper.h b/voscompat/be/app/Looper.h
+new file mode 100644
+index 0000000..8f9fc60
+--- /dev/null
++++ b/voscompat/be/app/Looper.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/app/Looper.h>
+diff --git a/voscompat/be/app/MessageQueue.h b/voscompat/be/app/MessageQueue.h
+new file mode 100644
+index 0000000..313eb08
+--- /dev/null
++++ b/voscompat/be/app/MessageQueue.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/app/MessageQueue.h>
+diff --git a/voscompat/be/app/Roster.h b/voscompat/be/app/Roster.h
+new file mode 100644
+index 0000000..a932aa4
+--- /dev/null
++++ b/voscompat/be/app/Roster.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/app/Roster.h>
+diff --git a/voscompat/be/interface/Alert.h b/voscompat/be/interface/Alert.h
+new file mode 100644
+index 0000000..6a5beca
+--- /dev/null
++++ b/voscompat/be/interface/Alert.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/Alert.h>
+diff --git a/voscompat/be/interface/Bitmap.h b/voscompat/be/interface/Bitmap.h
+new file mode 100644
+index 0000000..733edb6
+--- /dev/null
++++ b/voscompat/be/interface/Bitmap.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/Bitmap.h>
+diff --git a/voscompat/be/interface/Button.h b/voscompat/be/interface/Button.h
+new file mode 100644
+index 0000000..15b9f25
+--- /dev/null
++++ b/voscompat/be/interface/Button.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/Button.h>
+diff --git a/voscompat/be/interface/Font.h b/voscompat/be/interface/Font.h
+new file mode 100644
+index 0000000..b77a247
+--- /dev/null
++++ b/voscompat/be/interface/Font.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/Font.h>
+diff --git a/voscompat/be/interface/GraphicsDefs.h b/voscompat/be/interface/GraphicsDefs.h
+new file mode 100644
+index 0000000..bd28fd3
+--- /dev/null
++++ b/voscompat/be/interface/GraphicsDefs.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/GraphicsDefs.h>
+diff --git a/voscompat/be/interface/ListItem.h b/voscompat/be/interface/ListItem.h
+new file mode 100644
+index 0000000..f201a98
+--- /dev/null
++++ b/voscompat/be/interface/ListItem.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/ListItem.h>
+diff --git a/voscompat/be/interface/ListView.h b/voscompat/be/interface/ListView.h
+new file mode 100644
+index 0000000..775c46f
+--- /dev/null
++++ b/voscompat/be/interface/ListView.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/ListView.h>
+diff --git a/voscompat/be/interface/Menu.h b/voscompat/be/interface/Menu.h
+new file mode 100644
+index 0000000..f63a8b8
+--- /dev/null
++++ b/voscompat/be/interface/Menu.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/Menu.h>
+diff --git a/voscompat/be/interface/MenuBar.h b/voscompat/be/interface/MenuBar.h
+new file mode 100644
+index 0000000..a9d9d36
+--- /dev/null
++++ b/voscompat/be/interface/MenuBar.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/MenuBar.h>
+diff --git a/voscompat/be/interface/MenuField.h b/voscompat/be/interface/MenuField.h
+new file mode 100644
+index 0000000..c363b72
+--- /dev/null
++++ b/voscompat/be/interface/MenuField.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/MenuField.h>
+diff --git a/voscompat/be/interface/MenuItem.h b/voscompat/be/interface/MenuItem.h
+new file mode 100644
+index 0000000..aa84237
+--- /dev/null
++++ b/voscompat/be/interface/MenuItem.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/MenuItem.h>
+diff --git a/voscompat/be/interface/PictureButton.h b/voscompat/be/interface/PictureButton.h
+new file mode 100644
+index 0000000..52ff611
+--- /dev/null
++++ b/voscompat/be/interface/PictureButton.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/PictureButton.h>
+diff --git a/voscompat/be/interface/PopUpMenu.h b/voscompat/be/interface/PopUpMenu.h
+new file mode 100644
+index 0000000..a175bd1
+--- /dev/null
++++ b/voscompat/be/interface/PopUpMenu.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/PopUpMenu.h>
+diff --git a/voscompat/be/interface/PrintJob.h b/voscompat/be/interface/PrintJob.h
+new file mode 100644
+index 0000000..3c38b0b
+--- /dev/null
++++ b/voscompat/be/interface/PrintJob.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/PrintJob.h>
+diff --git a/voscompat/be/interface/Screen.h b/voscompat/be/interface/Screen.h
+new file mode 100644
+index 0000000..73657aa
+--- /dev/null
++++ b/voscompat/be/interface/Screen.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/Screen.h>
+diff --git a/voscompat/be/interface/ScrollBar.h b/voscompat/be/interface/ScrollBar.h
+new file mode 100644
+index 0000000..06cb01f
+--- /dev/null
++++ b/voscompat/be/interface/ScrollBar.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/ScrollBar.h>
+diff --git a/voscompat/be/interface/ScrollView.h b/voscompat/be/interface/ScrollView.h
+new file mode 100644
+index 0000000..5f45cfc
+--- /dev/null
++++ b/voscompat/be/interface/ScrollView.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/ScrollView.h>
+diff --git a/voscompat/be/interface/StringView.h b/voscompat/be/interface/StringView.h
+new file mode 100644
+index 0000000..a295d6a
+--- /dev/null
++++ b/voscompat/be/interface/StringView.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/StringView.h>
+diff --git a/voscompat/be/interface/TabView.h b/voscompat/be/interface/TabView.h
+new file mode 100644
+index 0000000..17e9abb
+--- /dev/null
++++ b/voscompat/be/interface/TabView.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/TabView.h>
+diff --git a/voscompat/be/interface/TextControl.h b/voscompat/be/interface/TextControl.h
+new file mode 100644
+index 0000000..5884586
+--- /dev/null
++++ b/voscompat/be/interface/TextControl.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/TextControl.h>
+diff --git a/voscompat/be/interface/View.h b/voscompat/be/interface/View.h
+new file mode 100644
+index 0000000..7303749
+--- /dev/null
++++ b/voscompat/be/interface/View.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/interface/View.h>
+diff --git a/voscompat/be/kernel/scheduler.h b/voscompat/be/kernel/scheduler.h
+new file mode 100644
+index 0000000..0073e7b
+--- /dev/null
++++ b/voscompat/be/kernel/scheduler.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/kernel/scheduler.h>
+diff --git a/voscompat/be/storage/Directory.h b/voscompat/be/storage/Directory.h
+new file mode 100644
+index 0000000..8b9cb10
+--- /dev/null
++++ b/voscompat/be/storage/Directory.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/Directory.h>
+diff --git a/voscompat/be/storage/Entry.h b/voscompat/be/storage/Entry.h
+new file mode 100644
+index 0000000..e80e005
+--- /dev/null
++++ b/voscompat/be/storage/Entry.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/Entry.h>
+diff --git a/voscompat/be/storage/File.h b/voscompat/be/storage/File.h
+new file mode 100644
+index 0000000..585b69c
+--- /dev/null
++++ b/voscompat/be/storage/File.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/File.h>
+diff --git a/voscompat/be/storage/FilePanel.h b/voscompat/be/storage/FilePanel.h
+new file mode 100644
+index 0000000..fedd93f
+--- /dev/null
++++ b/voscompat/be/storage/FilePanel.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/FilePanel.h>
+diff --git a/voscompat/be/storage/Node.h b/voscompat/be/storage/Node.h
+new file mode 100644
+index 0000000..2fe2760
+--- /dev/null
++++ b/voscompat/be/storage/Node.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/Node.h>
+diff --git a/voscompat/be/storage/NodeInfo.h b/voscompat/be/storage/NodeInfo.h
+new file mode 100644
+index 0000000..29bdfcd
+--- /dev/null
++++ b/voscompat/be/storage/NodeInfo.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/NodeInfo.h>
+diff --git a/voscompat/be/storage/NodeMonitor.h b/voscompat/be/storage/NodeMonitor.h
+new file mode 100644
+index 0000000..879d73b
+--- /dev/null
++++ b/voscompat/be/storage/NodeMonitor.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/NodeMonitor.h>
+diff --git a/voscompat/be/storage/Path.h b/voscompat/be/storage/Path.h
+new file mode 100644
+index 0000000..8769053
+--- /dev/null
++++ b/voscompat/be/storage/Path.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/storage/Path.h>
+diff --git a/voscompat/be/support/Beep.h b/voscompat/be/support/Beep.h
+new file mode 100644
+index 0000000..938f073
+--- /dev/null
++++ b/voscompat/be/support/Beep.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/Beep.h>
+diff --git a/voscompat/be/support/Debug.h b/voscompat/be/support/Debug.h
+new file mode 100644
+index 0000000..23900fe
+--- /dev/null
++++ b/voscompat/be/support/Debug.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/Debug.h>
+diff --git a/voscompat/be/support/List.h b/voscompat/be/support/List.h
+new file mode 100644
+index 0000000..6b67221
+--- /dev/null
++++ b/voscompat/be/support/List.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/List.h>
+diff --git a/voscompat/be/support/Locker.h b/voscompat/be/support/Locker.h
+new file mode 100644
+index 0000000..c2626f7
+--- /dev/null
++++ b/voscompat/be/support/Locker.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/Locker.h>
+diff --git a/voscompat/be/support/StopWatch.h b/voscompat/be/support/StopWatch.h
+new file mode 100644
+index 0000000..0b0a1df
+--- /dev/null
++++ b/voscompat/be/support/StopWatch.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/StopWatch.h>
+diff --git a/voscompat/be/support/String.h b/voscompat/be/support/String.h
+new file mode 100644
+index 0000000..57c7197
+--- /dev/null
++++ b/voscompat/be/support/String.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/String.h>
+diff --git a/voscompat/be/support/SupportDefs.h b/voscompat/be/support/SupportDefs.h
+new file mode 100644
+index 0000000..65cf364
+--- /dev/null
++++ b/voscompat/be/support/SupportDefs.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/SupportDefs.h>
+diff --git a/voscompat/be/support/UTF8.h b/voscompat/be/support/UTF8.h
+new file mode 100644
+index 0000000..2dc0c3e
+--- /dev/null
++++ b/voscompat/be/support/UTF8.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/support/UTF8.h>
+diff --git a/voscompat/be/translation/BitmapStream.h b/voscompat/be/translation/BitmapStream.h
+new file mode 100644
+index 0000000..52425df
+--- /dev/null
++++ b/voscompat/be/translation/BitmapStream.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/translation/BitmapStream.h>
+diff --git a/voscompat/be/translation/TranslationUtils.h b/voscompat/be/translation/TranslationUtils.h
+new file mode 100644
+index 0000000..9fa0a24
+--- /dev/null
++++ b/voscompat/be/translation/TranslationUtils.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/translation/TranslationUtils.h>
+diff --git a/voscompat/be/translation/TranslatorRoster.h b/voscompat/be/translation/TranslatorRoster.h
+new file mode 100644
+index 0000000..61f95d8
+--- /dev/null
++++ b/voscompat/be/translation/TranslatorRoster.h
+@@ -0,0 +1,2 @@
++/* Copyright 2026, Dario Casalinuovo. All rights reserved. */
++#include <os/translation/TranslatorRoster.h>

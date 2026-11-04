@@ -1,0 +1,4 @@
+#!/usr/bin/make -f
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine

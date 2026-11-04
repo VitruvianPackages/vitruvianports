@@ -1,0 +1,16 @@
+Source: paladin
+Section: devel
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libpcre2-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Paladin
+
+Package: paladin
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: project-based IDE for writing V\OS applications
+ Paladin is a simple project-based IDE: it keeps source groups, build
+ options and run settings per project, drives the build, parses compiler
+ errors back into the editor view and launches the result.

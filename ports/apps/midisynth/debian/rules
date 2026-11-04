@@ -1,0 +1,12 @@
+#!/usr/bin/make -f
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine
+
+# Sample key map and chord list go with the system data.
+override_dh_auto_install:
+	dh_auto_install --
+	install -D -m 0644 KeyMappings/Default \
+		debian/midisynth/system/data/midisynth/KeyMappings/Default
+	install -D -m 0644 Chords \
+		debian/midisynth/system/data/midisynth/Chords

@@ -1,0 +1,16 @@
+Source: vos-xcalc
+Section: math
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/XCalc
+
+Package: vos-xcalc
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: XCalc calculator for V\OS
+ XCalc is a graphical RPN calculator: a calculator-style button panel with
+ scientific functions, hex/oct/bin number bases, bit operations, keyboard
+ input and a multi-language dictionary for the labels.

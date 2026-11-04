@@ -1,0 +1,20 @@
+Description: do not link the legacy networking library
+ V\OS ships the whole network API (BNetworkRoster, BNetworkInterface,
+ BNetworkInterfaceAddress) inside libbe, which the Makefile already
+ links through LIBS=be.  There is no separate legacy networking library
+ here, so the extra link flag is dropped; interface counters keep coming
+ from the network API, not from legacy kernel ioctls.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -108,7 +108,7 @@
+ COMPILER_FLAGS =
+ 
+ #	specify additional linker flags
+-LINKER_FLAGS = -lbnetapi
++LINKER_FLAGS =
+ 
+ #	specify the version of this particular item
+ #	(for example, -app 3 4 0 d 0 -short 340 -long "340 "`echo -n -e '\302\251'`"1999 GNU GPL")

@@ -1,0 +1,5 @@
+0001-build-drop-target-dir-land-binary-in-obj.patch
+0002-build-link-the-vos-platform-libraries.patch
+0003-build-add-the-vos-network-headers-include-path.patch
+0004-posix-fd_set-is-a-typedef-not-a-struct-tag.patch
+0005-initial-settings-from-system-data.patch

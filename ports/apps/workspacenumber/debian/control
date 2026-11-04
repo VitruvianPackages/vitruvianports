@@ -1,0 +1,17 @@
+Source: workspacenumber
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/WorkspaceNumber
+
+Package: workspacenumber
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: workspace number tray indicator for V\OS
+ WorkspaceNumber is a Deskbar tray item that shows the number of the
+ current workspace. Left-click opens the Workspaces applet, the mouse
+ wheel switches workspaces while hovering the item, and a right-click
+ menu offers About and removing the item.

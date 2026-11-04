@@ -1,0 +1,52 @@
+Description: Add a top-level Makefile-Engine project file
+ The add-on subproject's own makefile hardwires legacy absolute paths
+ (engine include, add-on header directory) and lives below
+ src/Shredder-S, next to the stand-alone application variant that is
+ not packaged. This top-level file builds just the add-on subproject
+ from the tree root next to debian/: TYPE=SHARED for load_add_on,
+ COMPILER_FLAGS=-fPIC because the packaged engine does not add it for
+ shared targets, and the Tracker add-on header directory from the
+ packaged headers.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,37 @@
++## Top-level Makefile-Engine project file for the V\OS packaging build.
++## Packages only the Tracker add-on half of the upstream tree (the
++## src/Shredder-S subproject); the stand-alone src/Shredder application
++## is not part of this package. Upstream's subproject makefile hardwires
++## legacy absolute paths, so the engine is located the usual way and the
++## Tracker add-on header directory comes from the packaged headers.
++##
++## Copyright 2026, Dario Casalinuovo. All rights reserved.
++
++NAME = Shredder
++TYPE = SHARED
++APP_MIME_SIG =
++
++SRCS = src/Shredder-S/PAppWindow.cpp src/Shredder-S/PStatWindow.cpp \
++	src/Shredder-S/ShredderAppAddon.cpp
++
++RDEFS = src/Shredder-S/Shredder.rdef
++RSRCS =
++
++LIBS = be localestub tracker $(STDCPPLIBS)
++LIBPATHS =
++SYSTEM_INCLUDE_PATHS = /system/develop/headers/os/add-ons/tracker
++LOCAL_INCLUDE_PATHS =
++
++OPTIMIZE =
++WARNINGS =
++DEBUGGER =
++DEFINES =
++COMPILER_FLAGS = -fPIC
++LINKER_FLAGS =
++
++APP_VERSION :=
++
++## Include the Makefile-Engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

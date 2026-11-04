@@ -1,0 +1,48 @@
+Description: add the top-level Makefile that drives the sub-builds
+ Upstream builds through build.sh (static library, encoder add-ons, then the
+ application, each with its own OBJ_DIR); there is no top-level Makefile, so
+ the vos_makefile_engine debhelper class has nothing to run for build or
+ clean. This top-level Makefile runs the same three makefile-engine sub-builds in
+ dependency order (parallel-safe), keeps each sub-make's OBJ_DIR layout that
+ Makefile_Hare's LIBPATHS and build.sh's expectations rely on, and lets the
+ class's DEVEL_DIRECTORY/MIMESET overrides propagate through MAKEFLAGS while
+ explicit OBJ_DIR arguments stay per sub-make.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,32 @@
++## Top-level driver for the Hare makefile-engine sub-projects.
++##
++## Upstream builds through build.sh: the static library (Makefile_libHare),
++## the encoder add-ons (Makefile_Encoders) and the application
++## (Makefile_Hare) in that order, each with its own OBJ_DIR layout. The
++## vos_makefile_engine debhelper class runs "make" and "make clean" against
++## this Makefile, so it drives the same three makefile-engine sub-builds and
++## nothing else. Each sub-make gets its OBJ_DIR explicitly (explicit
++## arguments win over the inherited one); DEVEL_DIRECTORY and MIMESET from
++## the class keep propagating through MAKEFLAGS.
++
++all: app
++
++app: encoders
++
++encoders: lib
++
++lib:
++	$(MAKE) -f Makefile_libHare OBJ_DIR=objects_libhare
++
++encoders:
++	$(MAKE) -f Makefile_Encoders OBJ_DIR=objects_encoder
++
++app:
++	$(MAKE) -f Makefile_Hare OBJ_DIR=objects_hare
++
++clean:
++	-$(MAKE) -f Makefile_libHare OBJ_DIR=objects_libhare clean
++	-$(MAKE) -f Makefile_Encoders OBJ_DIR=objects_encoder clean
++	-$(MAKE) -f Makefile_Hare OBJ_DIR=objects_hare clean
++
++.PHONY: all app encoders lib clean

@@ -1,0 +1,21 @@
+--- a/source/InnerPanelIcons.cpp
++++ b/source/InnerPanelIcons.cpp
+@@ -184,11 +184,16 @@
+ 
+ void TZoomableIcon::Draw()
+ {
++	BBitmap *which = Bitmap();
++	// Icons whose backing entry could not be resolved (e.g. a missing
++	// Trash directory on a fresh live system) have no bitmap; skip them
++	// instead of dereferencing NULL.
++	if (!which)
++		return;
++
+ 	PrepareDrawing();
+ 	BPoint where = ContentLocation();
+ 
+-	BBitmap *which = Bitmap();
+-
+ 	where.x += (kDefaultBigIconSize - which->Bounds().Width()) / 2;
+ 	where.y += (kDefaultBigIconSize - which->Bounds().Height()) / 2;
+ 

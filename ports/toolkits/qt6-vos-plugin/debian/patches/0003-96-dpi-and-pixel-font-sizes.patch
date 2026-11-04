@@ -1,0 +1,130 @@
+Description: Report 96 dpi and size theme fonts in pixels.
+Author: Vladislav Janeček <38503981+schotek@users.noreply.github.com>
+Origin: vendor
+Forwarded: no
+---
+ README.md                     | 37 +++++++++++++++++++++++++++++++++++
+ src/platform/qhaikuscreen.cpp |  6 +++++-
+ src/platform/qhaikutheme.cpp  | 16 ++++++++++-----
+ 3 files changed, 53 insertions(+), 6 deletions(-)
+
+diff --git a/README.md b/README.md
+index c8a5ece..dfeb60e 100644
+--- a/README.md
++++ b/README.md
+@@ -1,2 +1,39 @@
+ # qt6-haikuplugins
+ Qt6 plugins for Haiku
++
++## Vitruvian branch
++
++This branch (`vitruvian`) builds the `haiku` QPA plugin against
++[VitruvianOS](https://github.com/VitruvianOS/Vitruvian)'s libbe, so stock Debian
++Qt 6 applications run as native Vitruvian applications. See
++[VitruvianOS/Vitruvian#214](https://github.com/VitruvianOS/Vitruvian/issues/214)
++for the port write-up.
++
++### TODO: system tray and notifications need `qsystray` / `qnotify`
++
++`QHaikuSystemTrayIcon` does not talk to the Deskbar itself — it shells out to an
++external helper and then drives the resulting replicant over BMessages
++(`'MSGR'`, `'BITS'`):
++
++```cpp
++sysTrayExecutable.setFile("/bin/qsystray");
++```
++
++That helper is **not part of this repository**. It lives in the Qt5 tree,
++[threedeyes/qthaikuplugins](https://github.com/threedeyes/qthaikuplugins), and
++haikuports packages it separately as
++[dev-qt/qsystray](https://github.com/haikuports/haikuports/tree/master/dev-qt/qsystray)
++(recipe `qsystray-5.15.2.14`), which provides both `cmd:qsystray` and
++`cmd:qnotify` — the latter backing `showMessage()`.
++
++The recipe's `REQUIRES` is just `haiku`: these are plain libbe/BeOS tools with
++no Qt dependency, built with a bare `make`. Porting them to Vitruvian should
++therefore be small, and it is the missing half of tray and notification
++support. The plugin/replicant protocol is BMessage-based, so the Qt5-era
++helpers are expected to work with this Qt6 plugin — unverified until built.
++
++Until they exist, `isSystemTrayAvailable()` reports the truth (whether
++`/bin/qsystray` is present) instead of a hardcoded `true`. Reporting `true`
++without the helper is a trap: an application told the tray exists will happily
++hide itself into it — qBittorrent's "close to tray" leaves no window and no
++icon, only `pkill`.
+\ No newline at end of file
+diff --git a/src/platform/qhaikuscreen.cpp b/src/platform/qhaikuscreen.cpp
+index 1bae80f..c13d8ed 100644
+--- a/src/platform/qhaikuscreen.cpp
++++ b/src/platform/qhaikuscreen.cpp
+@@ -144,7 +144,11 @@ QSizeF QHaikuScreen::physicalSize() const
+ 
+ QDpi QHaikuScreen::logicalDpi() const
+ {
+-    return QDpi(72, 72);
++    // Haiku treats a point as a pixel and reports 72. Debian's Qt applications
++    // are built against the freedesktop convention of 96, so at 72 everything
++    // sized in points comes out at 75% — Qt Creator's editor text being the
++    // obvious case. The theme's UI font is set in pixels and is unaffected.
++    return QDpi(96, 96);
+ }
+ 
+ Qt::ScreenOrientation QHaikuScreen::nativeOrientation() const
+diff --git a/src/platform/qhaikutheme.cpp b/src/platform/qhaikutheme.cpp
+index 816f2dc..3ccb581 100644
+--- a/src/platform/qhaikutheme.cpp
++++ b/src/platform/qhaikutheme.cpp
+@@ -243,31 +243,37 @@ const QFont *QHaikuTheme::font(Font type) const
+ 		float kSmallFont = 0.72;
+ 		float kBold = 0.96;
+ 
++	    // BFont::Size() is a pixel size in practice: Haiku runs at 72 dpi, where
++	    // a point and a pixel coincide. We report 96 dpi (see QHaikuScreen), so
++	    // feeding that number to setPointSizeF() would inflate the whole UI by
++	    // a third. Set it as a pixel size instead — the interface keeps its
++	    // native proportions while fonts an application asks for in points
++	    // still come out the size its author intended.
+ 	    // Build QFonts directly: going through QFontDatabase::font() here
+ 	    // re-enters QGuiApplication::font() while its mutex is already held
+ 	    // by the caller during application init (deadlock on Qt 6.8).
+ 	    QFont baseFont((QString(QLatin1String(plainFontFamily))));
+ 	    baseFont.setStyleName(QLatin1String(plainFontStyle));
+ 	    if (haikuPlainFont.Size() >= 0)
+-			baseFont.setPointSizeF(haikuPlainFont.Size());
++			baseFont.setPixelSize(qRound(haikuPlainFont.Size()));
+ 	    baseFont.setStretch(QFont::Unstretched);
+ 
+ 	    QFont boldFont((QString(QLatin1String(boldFontFamily))));
+ 	    boldFont.setStyleName(QLatin1String(boldFontStyle));
+ 	    if (haikuBoldFont.Size() >= 0)
+-			boldFont.setPointSizeF(haikuBoldFont.Size() * kBold);
++			boldFont.setPixelSize(qRound(haikuBoldFont.Size() * kBold));
+ 	    boldFont.setStretch(QFont::Unstretched);
+ 
+ 	    QFont monoFont((QString(QLatin1String(fixedFontFamily))));
+ 	    monoFont.setStyleName(QLatin1String(fixedFontStyle));
+ 	    if (haikuFixedFont.Size() >= 0)
+-			monoFont.setPointSizeF(haikuFixedFont.Size());
++			monoFont.setPixelSize(qRound(haikuFixedFont.Size()));
+ 	    monoFont.setStretch(QFont::Unstretched);
+ 
+ 	    QFont menuFont((QString(QLatin1String(haikuMenuFontInfo.f_family))));
+ 	    menuFont.setStyleName(QLatin1String(haikuMenuFontInfo.f_style));
+ 	    if (haikuMenuFontInfo.font_size >= 0)
+-			menuFont.setPointSizeF(haikuMenuFontInfo.font_size);
++			menuFont.setPixelSize(qRound(haikuMenuFontInfo.font_size));
+ 	    menuFont.setStretch(QFont::Unstretched);
+ 
+ 	    QHash<QPlatformTheme::Font, QFont *> fonts;
+@@ -290,7 +296,7 @@ const QFont *QHaikuTheme::font(Font type) const
+ 	    fonts.insert(QPlatformTheme::FixedFont, new QFont(monoFont));
+ 
+ 	    QFont smallFont(baseFont);
+-	    smallFont.setPointSizeF(haikuPlainFont.Size() * kSmallFont);
++	    smallFont.setPixelSize(qRound(haikuPlainFont.Size() * kSmallFont));
+ 	    fonts.insert(QPlatformTheme::SmallFont, new QFont(smallFont));
+ 	    fonts.insert(QPlatformTheme::MiniFont, new QFont(smallFont));
+ 
+-- 
+2.47.3
+

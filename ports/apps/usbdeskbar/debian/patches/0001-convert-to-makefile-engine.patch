@@ -1,0 +1,95 @@
+Description: build with the Makefile-Engine instead of the hand makefile
+ Upstream drives rc, xres and mimeset from a hand-written makefile. The
+ V\OS debhelper buildsystem class needs a Makefile-Engine project: it
+ passes DEVEL_DIRECTORY, MIMESET and OBJ_DIR on the make command line
+ and installs obj/$(NAME). Convert the makefile to that form, link the
+ udev library for the device enumeration added in the next patch, and
+ expose the port's own USBKit.h for the angle include.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -1,19 +1,68 @@
+-CFLAGS=-O3
+-LIBS=-lroot -lbe -ldevice
+-CC=g++
+-OBJS = Launcher.o USBDeskbarInfoWin.o USBDeskbarRoster.o USBDeskbarView.o USBPreferenceFile.o
++## Application Specific Settings ---------------------------------------------
+ 
++#	specify the name of the binary
++NAME = USBDeskbarView
+ 
+-all: build
++#	specify the type of binary: APP (application, also the replicant image)
++TYPE = APP
+ 
+-build: $(OBJS)
+-	$(CC) $(CFLAGS) -o USBDeskbarView $^ $(LIBS)
+-	rc USBDeskbarView.rdef
+-	xres -o USBDeskbarView USBDeskbarView.rsrc
+-	mimeset -f USBDeskbarView
++#	the application's MIME signature (the Deskbar replicant's add-on id)
++APP_MIME_SIG = application/x-vnd.CKJ.USBDeskbarView
+ 
+-.cpp.o:
+-	$(CC) $(CFLAGS) -c $^
++#	specify the source files to use
++SRCS = Launcher.cpp USBDeskbarInfoWin.cpp USBDeskbarRoster.cpp \
++	   USBDeskbarView.cpp USBPreferenceFile.cpp USBKit.cpp
+ 
+-clean:
+-	rm -f USBDeskbarView $(OBJS)
++#	specify the resource definition files to use
++RDEFS = USBDeskbarView.rdef
++
++#	specify the resource files to use
++RSRCS =
++
++#	specify additional libraries to link against
++LIBS = be udev $(STDCPPLIBS)
++
++#	additional paths to directories following the standard libXXX naming
++LIBPATHS =
++
++#	USBKit.h ships with this port (no legacy USB kit here); -isystem .
++#	makes the angle include of it resolve.
++SYSTEM_INCLUDE_PATHS = .
++
++#	additional paths to look for local headers
++LOCAL_INCLUDE_PATHS =
++
++#	specify the level of optimization: NONE, SOME, FULL
++OPTIMIZE = FULL
++
++#	specify any preprocessor symbols to be defined
++DEFINES =
++
++#	specify special warning levels
++WARNINGS = ALL
++
++#	specify whether image symbols will be created
++SYMBOLS =
++
++#	specify debug settings
++DEBUGGER =
++
++#	specify additional compiler flags for all files
++COMPILER_FLAGS =
++
++#	specify additional linker flags
++LINKER_FLAGS =
++
++#	specify the version of this particular item
++APP_VERSION = 1 0 0
++
++DRIVER_PATH =
++
++## include the makefile-engine
++DEVEL_DIRECTORY := \
++	$(shell if findpaths > /dev/null 2>&1 ; then \
++		findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY ; \
++	else \
++		finddir B_SYSTEM_DEVELOP_DIRECTORY ; \
++	fi)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

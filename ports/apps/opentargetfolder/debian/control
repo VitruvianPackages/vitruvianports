@@ -1,0 +1,16 @@
+Source: opentargetfolder
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/OpenTargetFolder
+
+Package: opentargetfolder
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: open-target-folder Tracker add-on for V\OS
+ OpenTargetFolder adds a right-click Tracker action that opens, in a
+ Tracker window, the folder the target of a selected symbolic link
+ lives in.

@@ -1,0 +1,22 @@
+Description: build the shipped Maps.rdef into the application
+ The repository ships src/Maps.rdef (app signature, app flags, version
+ resource and the vector icon) but the Makefile leaves RDEFS empty, so no
+ .rsrc is produced, nothing is embedded, and the port would ship without
+ the signature and icon attributes that every other V\OS port carries
+ through its apps_attrs.tar. Wire the resource definition the Pe/Eddie
+ section documents.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Maps
+
+--- a/Makefile
++++ b/Makefile
+@@ -41,7 +41,7 @@
+ 
+ #	Specify the resource definition files to use. Full or relative paths can be
+ #	used.
+-RDEFS =
++RDEFS = src/Maps.rdef
+ 
+ #	Specify the resource files to use. Full or relative paths can be used.
+ #	Both RDEFS and RSRCS can be utilized in the same Makefile.

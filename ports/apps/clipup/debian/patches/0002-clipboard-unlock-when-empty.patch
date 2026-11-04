@@ -1,0 +1,24 @@
+Description: release the clipboard lock when the clipboard is empty
+ FetchSystemClipboard() returned early on an empty clipboard with
+ be_clipboard still locked. The first fetch runs at startup, so the
+ next B_CLIPBOARD_CHANGED left the Deskbar window waiting for that lock
+ forever, and with it every event app_server tried to deliver there.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+diff --git a/Main/MultiClipboard.cpp b/Main/MultiClipboard.cpp
+index 1b02266..24f4768 100644
+--- a/Main/MultiClipboard.cpp
++++ b/Main/MultiClipboard.cpp
+@@ -113,7 +113,10 @@ void MultiClipboard::FetchSystemClipboard( bool getApplicationName ) {
+ 	
+ 	BMessage *clip_msg = be_clipboard->Data();
+ 	
+-	if (!clip_msg || clip_msg->IsEmpty()) return;
++	if (!clip_msg || clip_msg->IsEmpty()) {
++		be_clipboard->Unlock();
++		return;
++	}
+ 	
+ 	Clip	*clip;
+ 	

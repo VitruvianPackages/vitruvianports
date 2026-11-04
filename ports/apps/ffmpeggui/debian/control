@@ -1,0 +1,18 @@
+Source: ffmpeggui
+Section: video
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/ffmpegGUI
+
+Package: ffmpeggui
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: ffmpeg
+Description: GUI frontend for ffmpeg
+ ffmpegGUI drives ffmpeg from a plain window: pick a source file and an
+ output preset, watch per-job progress, crop the picture, extract preview
+ frames, queue jobs in a manager and copy the generated command line for
+ manual runs. The ffmpeg and ffprobe executables are needed at runtime.

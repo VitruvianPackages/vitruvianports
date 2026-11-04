@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine
+
+override_dh_install:
+	dh_install
+	install -D -m 0644 debian/org.vitruvian.colors.metainfo.xml \
+		debian/colors/usr/share/metainfo/org.vitruvian.colors.metainfo.xml

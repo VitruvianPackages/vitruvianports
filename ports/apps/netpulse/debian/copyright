@@ -1,0 +1,15 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: NetPulse
+Source: https://github.com/HaikuArchives/NetPulse
+
+Files: *
+Copyright: Carlos Hasan and the NetPulse contributors
+           1999-2000 Be Incoporated (Source/SettingsFile.cpp)
+License: unknown
+ Upstream ships no licence file and the sources carry no licence
+ statement; Source/SettingsFile.cpp holds only a copyright line.
+ .
+ Files under GPL terms are marked as such in their own headers where
+ present; treat the upstream "GPL License" note in any later-added
+ files as authoritative for those files.

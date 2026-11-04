@@ -1,0 +1,207 @@
+Description: Drop the legacy be/ include prefix
+ The packaged headers live under the system include root without a be/
+ level (<app/Application.h> and friends), so the be/ prefixed form
+ never resolves. Mechanical rewrite of the include directives only; no
+ other source line changes.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- a/source/AppDefs.h
++++ b/source/AppDefs.h
+@@ -13,7 +13,7 @@
+  *
+  */
+ 
+-#include <be/support/Debug.h>
++#include <support/Debug.h>
+ 
+ #define APPLICATION_DIR "ReName"
+ #define WINDOW_FILE "window"
+--- a/source/AppWindow.h
++++ b/source/AppWindow.h
+@@ -13,23 +13,23 @@
+  *
+  */
+ 
+-#include <be/support/Debug.h>
++#include <support/Debug.h>
+ 
+-#include <be/app/Message.h>
+-#include <be/interface/Alert.h>
+-#include <be/interface/Menu.h>
+-#include <be/interface/MenuBar.h>
+-#include <be/interface/MenuItem.h>
+-#include <be/interface/Point.h>
+-#include <be/interface/View.h>
+-#include <be/interface/Window.h>
+-#include <be/storage/Entry.h>
+-#include <be/storage/File.h>
+-#include <be/storage/FindDirectory.h>
+-#include <be/storage/NodeInfo.h>
+-#include <be/storage/Path.h>
+-#include <be/support/ClassInfo.h>
+-#include <be/support/String.h>
++#include <app/Message.h>
++#include <interface/Alert.h>
++#include <interface/Menu.h>
++#include <interface/MenuBar.h>
++#include <interface/MenuItem.h>
++#include <interface/Point.h>
++#include <interface/View.h>
++#include <interface/Window.h>
++#include <storage/Entry.h>
++#include <storage/File.h>
++#include <storage/FindDirectory.h>
++#include <storage/NodeInfo.h>
++#include <storage/Path.h>
++#include <support/ClassInfo.h>
++#include <support/String.h>
+ #include "DragDropView.h"
+ #include "List.h"
+ #include "RenameView.h"
+--- a/source/Application.h
++++ b/source/Application.h
+@@ -13,15 +13,15 @@
+  *
+  */
+ 
+-#include <be/support/Debug.h>
++#include <support/Debug.h>
+ 
+-#include <be/app/Application.h>
+-#include <be/app/Message.h>
+-#include <be/storage/Directory.h>
+-#include <be/storage/Entry.h>
+-#include <be/storage/File.h>
+-#include <be/storage/FindDirectory.h>
+-#include <be/storage/Path.h>
++#include <app/Application.h>
++#include <app/Message.h>
++#include <storage/Directory.h>
++#include <storage/Entry.h>
++#include <storage/File.h>
++#include <storage/FindDirectory.h>
++#include <storage/Path.h>
+ 
+ #define SIGNATURE "application/x-vnd.flipsidesoftware.rename"
+ 
+--- a/source/DragDropView.h
++++ b/source/DragDropView.h
+@@ -13,12 +13,12 @@
+  *
+  */
+ 
+-#include <be/support/Debug.h>
++#include <support/Debug.h>
+ 
+-#include <be/interface/Box.h>
+-#include <be/interface/InterfaceDefs.h>
+-#include <be/interface/Rect.h>
+-#include <be/interface/View.h>
++#include <interface/Box.h>
++#include <interface/InterfaceDefs.h>
++#include <interface/Rect.h>
++#include <interface/View.h>
+ 
+ #define LABEL "Drop Files to ReName!"
+ 
+--- a/source/FileName.cpp
++++ b/source/FileName.cpp
+@@ -11,8 +11,8 @@
+  */
+ 
+ #include <ctype.h>
+-#include <be/interface/Alert.h>
+-#include <be/support/Debug.h>
++#include <interface/Alert.h>
++#include <support/Debug.h>
+ #include "FileName.h"
+ 
+ FileName::FileName(entry_ref* p_ref)
+--- a/source/FileName.h
++++ b/source/FileName.h
+@@ -13,8 +13,8 @@
+  *
+  */
+ 
+-#include <be/storage/Entry.h>
+-#include <be/support/String.h>
++#include <storage/Entry.h>
++#include <support/String.h>
+ 
+ class FileName
+ {
+--- a/source/List.h
++++ b/source/List.h
+@@ -13,11 +13,11 @@
+  *
+  */
+ 
+-#include <be/support/Debug.h>
++#include <support/Debug.h>
+ 
+ #include <time.h>
+-#include <be/support/List.h>
+-#include <be/support/Locker.h>
++#include <support/List.h>
++#include <support/Locker.h>
+ 
+ class List : public BList
+ {
+--- a/source/RenameView.h
++++ b/source/RenameView.h
+@@ -13,18 +13,18 @@
+  *
+  */
+ 
+-#include <be/support/Debug.h>
++#include <support/Debug.h>
+ 
+-#include <be/app/Message.h>
+-#include <be/interface/Box.h>
+-#include <be/interface/Button.h>
+-#include <be/interface/CheckBox.h>
+-#include <be/interface/RadioButton.h>
+-#include <be/interface/Rect.h>
+-#include <be/interface/StatusBar.h>
+-#include <be/interface/TextControl.h>
+-#include <be/interface/View.h>
+-#include <be/interface/Window.h>
++#include <app/Message.h>
++#include <interface/Box.h>
++#include <interface/Button.h>
++#include <interface/CheckBox.h>
++#include <interface/RadioButton.h>
++#include <interface/Rect.h>
++#include <interface/StatusBar.h>
++#include <interface/TextControl.h>
++#include <interface/View.h>
++#include <interface/Window.h>
+ 
+ #define BASENAME_CBOX_MSG       '001'
+ #define EXTENSION_CBOX_MSG      '002'
+--- a/source/driver.cpp
++++ b/source/driver.cpp
+@@ -11,14 +11,14 @@
+  */
+ 
+ #include <iostream>
+-#include <be/add-ons/tracker/TrackerAddOn.h>
+-#include <be/app/Application.h>
+-#include <be/app/Message.h>
+-#include <be/interface/Window.h>
+-#include <be/storage/Entry.h>
+-#include <be/storage/File.h>
+-#include <be/storage/FindDirectory.h>
+-#include <be/storage/Path.h>
++#include <add-ons/tracker/TrackerAddOn.h>
++#include <app/Application.h>
++#include <app/Message.h>
++#include <interface/Window.h>
++#include <storage/Entry.h>
++#include <storage/File.h>
++#include <storage/FindDirectory.h>
++#include <storage/Path.h>
+ #include "AppDefs.h"
+ #include "Application.h"
+ #include "AppWindow.h"

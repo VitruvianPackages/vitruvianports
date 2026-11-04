@@ -1,0 +1,20 @@
+Description: MainWindow.cpp: include RecentItems.h from its V\OS directory
+ V\OS ships the header at os/be_apps/Tracker/RecentItems.h. The
+ generic Makefile-Engine build takes its -I list from /etc/vos.specs, which
+ does not expose that directory, so <RecentItems.h> does not resolve when
+ the app is built against the packaged vos-dev (in-tree consumers of the
+ header use the subpath form too).
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+
+--- a/src/MainWindow.cpp
++++ b/src/MainWindow.cpp
+@@ -20,7 +20,7 @@
+ #include <MenuBar.h>
+ #include <Messenger.h>
+ #include <Path.h>
+-#include <RecentItems.h>
++#include <be_apps/Tracker/RecentItems.h>
+ #include <Resources.h>
+ #include <Roster.h>
+ #include <Screen.h>

@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+# Makefile is in src/; steer the engine from here.
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure:
+	# engine makefile; nothing to configure
+
+override_dh_auto_build:
+	LINK_LIBS=-lroot $(MAKE) -C src DEVEL_DIRECTORY=/ MIMESET=true \
+		OBJ_DIR=obj -j$(shell nproc 2>/dev/null || echo 2)
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D src/obj/FontBoy $(CURDIR)/debian/fontboy/system/apps/FontBoy
+	# APP_MIME_SIG is empty upstream: no localized catalogs ship; keep the
+	# count visible in the build log.
+	@echo "fontboy: catkeys files: $$(find . -name '*.catkeys' | wc -l)"

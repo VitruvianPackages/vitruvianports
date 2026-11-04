@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.vitruvian.colors</id>
+  <name>Colors</name>
+  <summary>Color picker</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      Colors is a color picker: it shows the colour under the pointer, keeps a palette of recent colours, and delivers colours to other applications by drag and drop.
+    </p>
+  </description>
+  <developer id="org.vitruvian"><name>The Vitruvian Project</name></developer>
+  <launchable type="desktop-id">org.vitruvian.colors.desktop</launchable>
+  <categories>
+    <category>Graphics</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <url type="homepage">https://v-os.dev</url>
+</component>

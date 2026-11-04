@@ -1,0 +1,25 @@
+Description: construct BUrl with an explicit encode flag
+ The app assembles the request URL as a finished BString and wraps it
+ with the single-argument BUrl construction. The platform BUrl has no
+ BString constructor, and a one-argument construction is ambiguous
+ between the public (const char*, bool encode = true) overload and the
+ deprecated private (const char*) overload, so the original call does
+ not compile. Passing false keeps the assembled URL byte for byte the
+ way the deprecated overload did; the encoding form would escape the
+ scheme separator and the rest of the finished URL.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+diff --git a/src/plugin/GoogleCalendar/Requests.h b/src/plugin/GoogleCalendar/Requests.h
+index 40eb97c..c34c756 100644
+--- a/src/plugin/GoogleCalendar/Requests.h
++++ b/src/plugin/GoogleCalendar/Requests.h
+@@ -94,7 +94,7 @@ class Requests {
+ 			BMessage& responseMessage)
+ 		{
+ 			ProtocolListener listener(true);
+-			BUrl link(url);
++			BUrl link(url, false);
+ 			BUrlRequest* request = BUrlProtocolRoster::MakeRequest( link, NULL, &listener );
+ 			BHttpRequest* hRequest = dynamic_cast<BHttpRequest *>(request);
+ 

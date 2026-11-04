@@ -1,0 +1,107 @@
+Description: stop the spinner cooperatively instead of suspend/kill_thread
+ The barber-pole view ran an endless thread that was frozen with
+ suspend_thread() (not implemented on VOS) and reaped with kill_thread()
+ (which kills the whole team on VOS). Resume the thread once at
+ construction, let it idle while Stop() is in effect, poll a quit flag
+ from the destructor and wait_for_thread() it; draw under
+ LockLooperWithTimeout() so the destructor cannot deadlock against the
+ window thread holding the looper lock.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/TraX
+--- a/Common/Support/BarberPole.cpp
++++ b/Common/Support/BarberPole.cpp
+@@ -6,20 +6,29 @@
+ 		
+ 	spinning_thread_id = spawn_thread(spinningThread, pName, B_DISPLAY_PRIORITY, this);
+ 	is_running = false;
++	f_quit = false;
+ 	direction = pDirection;
++	// Resume here (not in Start): the destructor must be able to wait on a
++	// thread that was never started. The loop idles until Start() sets
++	// is_running.
++	if (spinning_thread_id >= 0)
++		resume_thread(spinning_thread_id);
+ };
+ 
+ BarberPole::~BarberPole(){
+-	kill_thread(spinning_thread_id);
++	// Cooperative stop: no kill_thread (it would take the whole team on
++	// VOS). The spin loop polls f_quit and gives the looper up to 50ms
++	// per round, so waiting here cannot deadlock against the window thread.
++	f_quit = true;
++	if (spinning_thread_id >= 0)
++		wait_for_thread(spinning_thread_id, NULL);
+ }
+ 
+ void BarberPole::Start(){
+-	resume_thread(spinning_thread_id); 
+ 	is_running = true;
+ }
+ 
+ void BarberPole::Stop(){
+-	suspend_thread(spinning_thread_id); 
+ 	is_running = false;
+ }
+ 
+@@ -40,25 +49,32 @@
+ 	lStripes.data[6] = 0xc3;
+ 	lStripes.data[7] = 0x87;	
+ 	
+-	while(1==1){
+-		lBarberPole->LockLooper();
+-		lBarberPole->FillRect(lBarberPole->Bounds(), lStripes);
+-		lBarberPole->UnlockLooper();
+-
+-		if(lBarberPole->direction == FROM_RIGHT_TO_LEFT){
+-			uchar tmp = lStripes.data[0];
+-			for (int j = 0; j < 7; ++j) {
+-	  			lStripes.data[j] = lStripes.data[j+1];
+-			}
+-			lStripes.data[7] = tmp;
+-		} else {
+-			uchar tmp = lStripes.data[7];
+-			for (int j = 7; j > 0; --j) {
+-	  			lStripes.data[j] = lStripes.data[j-1];
++	while (!lBarberPole->f_quit) {
++		if (!lBarberPole->is_running) {
++			snooze(25000);
++			continue;
++		}
++
++		if (lBarberPole->LockLooperWithTimeout(50000) == B_OK) {
++			lBarberPole->FillRect(lBarberPole->Bounds(), lStripes);
++			lBarberPole->UnlockLooper();
++
++			if(lBarberPole->direction == FROM_RIGHT_TO_LEFT){
++				uchar tmp = lStripes.data[0];
++				for (int j = 0; j < 7; ++j) {
++	  				lStripes.data[j] = lStripes.data[j+1];
++				}
++				lStripes.data[7] = tmp;
++			} else {
++				uchar tmp = lStripes.data[7];
++				for (int j = 7; j > 0; --j) {
++	  				lStripes.data[j] = lStripes.data[j-1];
++				}
++				lStripes.data[0] = tmp;
++			
+ 			}
+-			lStripes.data[0] = tmp;
+-		
+ 		}
+ 		snooze(25000);
+ 	}
++	return 0;
+ };
+\ No newline at end of file
+--- a/Common/Support/BarberPole.h
++++ b/Common/Support/BarberPole.h
+@@ -19,6 +19,7 @@
+ protected:
+ 	thread_id	spinning_thread_id;
+ 	bool		is_running;
++	volatile bool	f_quit;
+ 	
+ private:
+ 			int		direction;

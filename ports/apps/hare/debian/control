@@ -1,0 +1,19 @@
+Source: vos-hare
+Section: sound
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libtag1-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Hare
+
+Package: vos-hare
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Recommends: lame, vorbis-tools
+Description: audio ripper and encoder frontend
+ Hare is a front end for ripping and encoding audio: it keeps a list of
+ tracks, reads and writes ID3 tags through taglib, and hands the actual
+ conversion to encoder add-ons - the Media-based one, M3U playlist
+ creation, MP3 GoGo, LAME and Ogg Vorbis (the last two drive the lame and
+ oggenc command line tools).

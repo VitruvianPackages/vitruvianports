@@ -1,0 +1,29 @@
+Description: database: print exception text as an argument, not as the format
+ printf(msg.String()) passes a non-literal string as the printf format. The
+ hardened buildflags used for V\OS packaging turn that into an error
+ (-Werror=format-security), and the message embeds user data (an SQL command)
+ as the format, which is a format-string hazard. Pass it as "%s" instead;
+ output text is unchanged.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: vendor, V\OS packaging
+--- a/Database.cpp
++++ b/Database.cpp
+@@ -105,7 +105,7 @@
+ 		BString msg("Database Exception in ");
+ 		msg << functionname << ".\n\n" << e.errorMessage()
+ 			<< "\n\nDatabase Exception Command: " << command << "\n";
+-		printf(msg.String());
++		printf("%s", msg.String());
+ 	}
+ }
+ 
+@@ -127,7 +127,7 @@
+ 		BString msg("Database Exception in ");
+ 		msg << functionname << ".\n\n" << e.errorMessage()
+ 			<< "\n\nDatabase Exception Query: " << query << "\n";
+-		printf(msg.String());
++		printf("%s", msg.String());
+ 	}
+ 	// this will never be reached - just to shut up the compiler
+ 	return CppSQLite3Query();

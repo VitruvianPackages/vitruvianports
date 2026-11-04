@@ -1,0 +1,98 @@
+Description: make CommandThread cooperative-stop safe and V\OS-typed
+ Two adaptations in the same class:
+ - the read-line error path used kill_thread(pipeThread), which on V\OS
+   kills the whole team instead of one thread; close the pipe's read end
+   first (the child's next write then fails and it ends) and reap with
+   wait_for_thread, the close-then-wait recipe.
+ - BObjectList now carries ownership as a template parameter, so the
+   owning argument list and every CommandThread signature that mentions
+   it move to BObjectList<BString, true>; every external caller passes
+   NULL, so no call site changes.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/BurnItNow
+--- a/Source/CommandThread.cpp
++++ b/Source/CommandThread.cpp
+@@ -43,13 +43,13 @@
+ };
+ 
+ 
+-CommandThread::CommandThread(BObjectList<BString>* argList, BInvoker* invoker)
++CommandThread::CommandThread(BObjectList<BString, true>* argList, BInvoker* invoker)
+ 	:
+ 	fArgumentList(argList),
+ 	fInvoker(invoker)
+ {
+ 	if (fArgumentList == NULL)
+-		fArgumentList = new BObjectList<BString>(5, true);
++		fArgumentList = new BObjectList<BString, true>(5);
+ }
+ 
+ 
+@@ -60,7 +60,7 @@
+ }
+ 
+ 
+-BObjectList<BString>*
++BObjectList<BString, true>*
+ CommandThread::Arguments()
+ {
+ 	AutoLocker<CommandThread> locker(this);
+@@ -72,7 +72,7 @@
+ 
+ 
+ void
+-CommandThread::SetArguments(BObjectList<BString>* argList)
++CommandThread::SetArguments(BObjectList<BString, true>* argList)
+ {
+ 	AutoLocker<CommandThread> locker(this);
+ 	delete fArgumentList;
+@@ -164,7 +164,7 @@
+ 	// TODO acquire autolock
+ 
+ 	BCommandPipe pipe;
+-	BObjectList<BString>* args = commandThread->Arguments();
++	BObjectList<BString, true>* args = commandThread->Arguments();
+ 
+ 	for (int32 x = 0; x < args->CountItems(); x++)
+ 		pipe << *args->ItemAt(x);
+@@ -184,7 +184,11 @@
+ 		= new CommandReader(commandThread->Invoker());
+ 
+ 	if (pipe.ReadLines(stdOutAndErrPipe, reader) != B_OK) {
+-		kill_thread(pipeThread);
++		// Cooperative stop: VOS has no usable kill_thread (it would take
++		// the whole team). Closing the read end makes the child's next
++		// write fail with EPIPE, the child (and its pipe thread) ends, and
++		// we reap it below - the close-then-wait recipe.
++		pipe.Close();
+ 		status_t exitval;
+ 		wait_for_thread(pipeThread, &exitval);
+ 		return B_ERROR;
+--- a/Source/CommandThread.h
++++ b/Source/CommandThread.h
+@@ -15,12 +15,12 @@
+ 
+ class CommandThread : public BLocker {
+ public:
+-					CommandThread(BObjectList<BString>* argList = NULL,
++					CommandThread(BObjectList<BString, true>* argList = NULL,
+ 						BInvoker* invoker = NULL);
+ 	virtual 		~CommandThread();
+ 
+-	BObjectList<BString>* Arguments();
+-	void 			SetArguments(BObjectList<BString>* argList);
++	BObjectList<BString, true>* Arguments();
++	void 			SetArguments(BObjectList<BString, true>* argList);
+ 	CommandThread*	AddArgument(const char* argument);
+ 
+ 	BInvoker* 		Invoker();
+@@ -35,7 +35,7 @@
+ 	static int32 	_Thread(void* data);
+ 	static void 	_ThreadExit(void* data);
+ 
+-	BObjectList<BString>* fArgumentList;
++	BObjectList<BString, true>* fArgumentList;
+ 	BInvoker* 		fInvoker;
+ 	thread_id 		fThread;
+ };

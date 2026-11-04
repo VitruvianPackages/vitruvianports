@@ -1,0 +1,39 @@
+Description: posix: fd_set is a typedef, not a struct tag
+ The platform fd_set comes from the POSIX header as a typedef;
+ writing "struct fd_set" does not name the type there and every
+ member access on it fails. Drop the struct tag at the three sites.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: own
+
+--- a/src/MessageAgent.cpp
++++ b/src/MessageAgent.cpp
+@@ -223,7 +223,7 @@
+ 	BString inputBuffer;
+ 	int32 recvReturn(0);
+ 
+-	struct fd_set rset, eset;
++	fd_set rset, eset;
+ 	FD_ZERO(&rset);
+ 	FD_ZERO(&eset);
+ 	FD_SET(dccAcceptSocket, &rset);
+@@ -346,7 +346,7 @@
+ 	BString inputBuffer;
+ 	int32 recvReturn(0);
+ 
+-	struct fd_set rset, eset;
++	fd_set rset, eset;
+ 	struct timeval tv = { 0, 0 };
+ 
+ 	FD_ZERO(&rset);
+--- a/src/Vision.cpp
++++ b/src/Vision.cpp
+@@ -1687,7 +1687,7 @@
+ 		listen(identSock, 1);
+ 
+ 		while (!vision_app->fShuttingDown) {
+-			struct fd_set rset, eset;
++			fd_set rset, eset;
+ 			struct sockaddr_in remoteSock;
+ 			int size(sizeof(sockaddr_in));
+ 			struct timeval tv = { 10, 0 };

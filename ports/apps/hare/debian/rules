@@ -1,0 +1,19 @@
+#!/usr/bin/make -f
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine
+
+# Three sub-builds with their own output layout, so install is explicit.
+override_dh_auto_install:
+	install -m 0755 -D objects_hare/Hare debian/vos-hare/system/apps/Hare
+	install -d debian/vos-hare/system/add-ons/Hare
+	install -m 0755 -D src/Encoders/BeEncoder/objects_encoder/BeEncoder \
+		debian/vos-hare/system/add-ons/Hare/BeEncoder
+	install -m 0755 -D src/Encoders/M3UCreator/objects_encoder/M3U-Creator \
+		debian/vos-hare/system/add-ons/Hare/M3U-Creator
+	install -m 0755 -D src/Encoders/MP3GoGo/objects_encoder/MP3-GoGo \
+		debian/vos-hare/system/add-ons/Hare/MP3-GoGo
+	install -m 0755 -D src/Encoders/MP3Lame/objects_encoder/MP3-Lame \
+		debian/vos-hare/system/add-ons/Hare/MP3-Lame
+	install -m 0755 -D src/Encoders/OGGEncoder/objects_encoder/OGG-Encoder \
+		debian/vos-hare/system/add-ons/Hare/OGG-Encoder

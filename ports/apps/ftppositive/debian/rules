@@ -1,0 +1,37 @@
+#!/usr/bin/make -f
+
+# Makefile is in src/; steer the engine from here.
+# -fpermissive demotes const-correctness errors from gcc 14.
+
+FTPP_SIG := application/x-vnd.momoziro-FtpPositive
+FTPP_LOCALES := $(shell sed -n 's/^LOCALES = //p' src/Makefile)
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure:
+	# engine makefile; nothing to configure
+
+override_dh_auto_build:
+	LINK_LIBS=-lroot $(MAKE) -C src DEVEL_DIRECTORY=/ MIMESET=true \
+		OBJ_DIR=obj COMPILER_FLAGS=-fpermissive \
+		-j$(shell nproc 2>/dev/null || echo 2)
+	mkdir -p "obj/$(FTPP_SIG)"
+	@for ck in src/locales/*.catkeys; do \
+		lang=$${ck##*/}; lang=$${lang%.catkeys}; \
+		case " $(FTPP_LOCALES) " in *" $$lang "*) ;; *) continue ;; esac; \
+		linkcatkeys -o "obj/$(FTPP_SIG)/$$lang.catalog" -s "$(FTPP_SIG)" \
+			-l "$$lang" "$$ck" || exit 1; \
+	done
+	@echo "ftppositive: catalogs built: $$(ls "obj/$(FTPP_SIG)"/*.catalog 2>/dev/null | wc -l)"
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D src/obj/FtpPositive \
+		$(CURDIR)/debian/ftppositive/system/apps/FtpPositive
+	# localized catalogs -> /system/data/locale/catalogs/<sig>/<lang>.catalog
+	install -d $(CURDIR)/debian/ftppositive/system/data/locale/catalogs/$(FTPP_SIG)
+	install -m 0644 -D "obj/$(FTPP_SIG)"/*.catalog \
+		$(CURDIR)/debian/ftppositive/system/data/locale/catalogs/$(FTPP_SIG)/

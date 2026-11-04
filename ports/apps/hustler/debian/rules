@@ -1,0 +1,43 @@
+#!/usr/bin/make -f
+
+# Makefile is in Source/; steer the engine from here.
+
+SPEC_INCLUDES := $(shell grep -oE '^-I.*' /etc/vos.specs | sed 's/^-I/-isystem /' | tr '\n' ' ' | sed 's/ *$$//')
+HUSTLER_CFLAGS := -O3 -Wall -Wno-multichar -fPIC \
+	$(SPEC_INCLUDES) \
+	-include LinuxBuildCompatibility.h
+
+# Link as a shared object that is still executable, so the Deskbar can load the replicant.
+include /usr/share/dh-vos/runnable-addon.mk
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure: runnable-addon-interp
+	mkdir -p /boot/develop/etc
+	ln -sfn /etc/makefile-engine /boot/develop/etc/makefile-engine
+	sed -i 's/^TYPE= *APP/TYPE= SHARED/' Source/Hustler/makefile
+
+override_dh_auto_build:
+	LINK_LIBS="-lroot -lstdc++" $(MAKE) -C Source/Hustler \
+		DEVEL_DIRECTORY=/ MIMESET=true OBJ_DIR=obj \
+		LINKER_FLAGS="$(RUNNABLE_LDFLAGS)" \
+		CFLAGS="$(HUSTLER_CFLAGS)" -j$(shell nproc 2>/dev/null || echo 2)
+	LINK_LIBS="-lroot -lstdc++" $(MAKE) -C "Source/SoundPlay Add-On" \
+		DEVEL_DIRECTORY=/ MIMESET=true OBJ_DIR=obj \
+		CFLAGS="$(HUSTLER_CFLAGS)" -j$(shell nproc 2>/dev/null || echo 2)
+
+override_dh_auto_clean: runnable-addon-clean
+	dh_auto_clean
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D Source/Hustler/obj/Hustler \
+		$(CURDIR)/debian/hustler/system/apps/Hustler
+	# player add-on at the path Hustler scans
+	install -d $(CURDIR)/debian/hustler/boot/home/config/add-ons/Hustler
+	install -m 0755 -D "Source/SoundPlay Add-On/obj/SoundPlayAddOn" \
+		$(CURDIR)/debian/hustler/boot/home/config/add-ons/Hustler/SoundPlayAddOn
+	@echo "hustler: catkeys files: $$(find . -name '*.catkeys' | wc -l), catalogs built: 0"

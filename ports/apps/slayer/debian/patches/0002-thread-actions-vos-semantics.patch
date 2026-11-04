@@ -1,0 +1,67 @@
+Description: adapt thread control actions to VOS semantics
+ DoKill() killed a single foreign thread with kill_thread(); on VOS that
+ call takes the target's whole team, so the thread row now resolves the
+ owning team with get_thread_info() and calls kill_team() explicitly
+ (same user-visible effect, honest about the semantics). DoSuspend() and
+ DoResume() suspended/resumed foreign threads; VOS implements neither for
+ foreign teams (suspend_thread() returns B_NOT_SUPPORTED and there is no
+ cooperative alternative across teams), so both bodies become documented
+ no-ops and the buttons stay for upstream parity.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Slayer
+--- a/src/MainWindow.cpp
++++ b/src/MainWindow.cpp
+@@ -462,8 +462,14 @@
+ 	while ((selected = teamView->CurrentSelection(selected))) {
+ 		if (selected->HasLatch())
+ 			kill_team(((TeamItem*)selected)->team);
+-		else
+-			kill_thread(((ThreadItem*)selected)->thread);
++		else {
++			// VOS kill_thread() would take the target's whole team;
++			// make the team kill explicit for a thread row.
++			thread_info info;
++			if (get_thread_info(((ThreadItem*)selected)->thread, &info)
++					== B_OK)
++				kill_team(info.team);
++		}
+ 
+ 		if (teamView->IndexOf(selected) == teamView->CountRows() - 1)
+ 			teamView->MoveToRow(teamView->IndexOf(selected) - 1);
+@@ -500,29 +506,17 @@
+ void
+ MainWindow::DoSuspend(void)
+ {
+-	BRow* selected = NULL;
+-	while ((selected = teamView->CurrentSelection(selected))) {
+-		// is a team or thread?
+-		if (selected->HasLatch())
+-			for (int i = 0; i < teamView->CountRows(selected); i++)
+-				suspend_thread(((ThreadItem*)teamView->RowAt(i, selected))->thread);
+-		else
+-			suspend_thread(((ThreadItem*)selected)->thread);
+-	}
++	// VOS has no per-thread suspend for foreign teams (suspend_thread()
++	// returns B_NOT_SUPPORTED), and there is no cooperative alternative
++	// across teams; the action stays for upstream parity but does
++	// nothing.
+ }
+ 
+ void
+ MainWindow::DoResume(void)
+ {
+-	BRow* selected = NULL;
+-	while ((selected = teamView->CurrentSelection(selected))) {
+-		// is a team or thread?
+-		if (selected->HasLatch())
+-			for (int i = 0; i < teamView->CountRows(selected); i++)
+-				resume_thread(((ThreadItem*)teamView->RowAt(i, selected))->thread);
+-		else
+-			resume_thread(((ThreadItem*)selected)->thread);
+-	}
++	// Pairs with DoSuspend(): VOS cannot resume a foreign thread that
++	// was never suspended there; nothing to do.
+ }
+ 
+ void

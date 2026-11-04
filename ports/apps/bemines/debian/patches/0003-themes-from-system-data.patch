@@ -1,0 +1,32 @@
+diff -ruN a/src/FieldView.cpp b/src/FieldView.cpp
+--- a/src/FieldView.cpp	2026-11-07 12:47:12.306156302 +0100
++++ b/src/FieldView.cpp	2026-11-07 12:47:12.346156460 +0100
+@@ -46,11 +46,7 @@
+ 	SetDifficulty(level);
+ 	SetDrawingMode(B_OP_ALPHA);
+ 
+-	app_info ai;
+-	be_app->GetAppInfo(&ai);
+-	BPath path(&ai.ref);
+-	path.GetParent(&path);
+-	path.Append("themes");
++	BPath path("/system/data/BeMines/themes");
+ 	fThemePath = path.Path();
+ 	SetSoundRefs();
+ }
+diff -ruN a/src/GameStyle.cpp b/src/GameStyle.cpp
+--- a/src/GameStyle.cpp	2026-11-07 12:47:12.306156302 +0100
++++ b/src/GameStyle.cpp	2026-11-07 12:47:12.346156460 +0100
+@@ -348,11 +348,7 @@
+ 		NULL
+ 	};
+ 
+-	app_info ai;
+-	be_app->GetAppInfo(&ai);
+-	BPath path(&ai.ref);
+-	path.GetParent(&path);
+-	path.Append("themes");
++	BPath path("/system/data/BeMines/themes");
+ 
+ 	BDirectory dir(path.Path());
+ 	dir.Rewind();

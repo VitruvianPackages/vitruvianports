@@ -1,0 +1,19 @@
+diff -ruN a/EyesView.cpp b/EyesView.cpp
+--- a/EyesView.cpp	2026-11-07 12:47:12.330156397 +0100
++++ b/EyesView.cpp	2026-11-07 12:47:20.986190690 +0100
+@@ -514,6 +514,15 @@
+ 
+ 	if( ImageFile.InitCheck() != B_OK)
+ 	{
++		if( ImagePath.SetTo( "/system/data/DeskbarEyes/Images") == B_OK
++			&& ImagePath.Append( FileName) == B_OK)
++		{
++			ImageFile.SetTo( ImagePath.Path(), B_READ_ONLY);
++		}
++	}
++
++	if( ImageFile.InitCheck() != B_OK)
++	{
+ 		if( ImagePath.SetTo( "Images") == B_OK)
+ 		{
+ 			if( ImagePath.Append( FileName) == B_OK)

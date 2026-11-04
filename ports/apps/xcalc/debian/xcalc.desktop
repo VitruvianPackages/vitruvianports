@@ -1,0 +1,11 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=XCalc
+GenericName=RPN calculator
+Comment=Reverse Polish notation calculator with scientific functions
+Exec=/system/apps/XCalc
+Icon=XCalc
+Terminal=false
+StartupNotify=true
+Categories=Utility;Math;

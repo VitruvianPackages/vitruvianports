@@ -1,0 +1,36 @@
+Description: read node-monitor moves through the virtual entry_ref
+ MoeMascot::PursuitNode() decoded the legacy node-monitor integer fields
+ ("to directory", "device", "name"). VOS node-monitor messages carry no
+ such fields - the complete entry_ref travels under "virtual:to
+ directory" - so the legacy reads always failed and the mascot never
+ followed its file. Use FindRef() on the exact field name and keep the
+ API-provided ref instead of rebuilding one from integers.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Moe
+--- a/source/MoeMascot.cpp
++++ b/source/MoeMascot.cpp
+@@ -115,15 +115,14 @@
+ void
+ MoeMascot::PursuitNode(const BMessage *msg)
+ {
+-  ino_t dir;
+-  dev_t dev;
+-  const char *name;
+-  
+-  msg->FindInt64("to directory", &dir);
+-  msg->FindInt32("device", &dev);
+-  msg->FindString("name", &name);
+-  
+-  mEntry = entry_ref(dev, dir, name);
++  // Node-monitor messages on VOS carry the complete entry_ref under
++  // "virtual:to directory"; the legacy integer fields ("to directory",
++  // "device", "name") never exist there, so reading them silently never
++  // matched. Keep the API-side ref instead of rebuilding one.
++  entry_ref ref;
++
++  if (msg->FindRef("virtual:to directory", &ref) == B_OK)
++    mEntry = ref;
+ }
+ 
+ 

@@ -1,0 +1,752 @@
+Description: add a udev-backed USB device enumeration layer
+ The legacy USB kit (USBKit.h: BUSBDevice, BUSBConfiguration,
+ BUSBInterface, BUSBEndpoint, BUSBRoster) has no V\OS counterpart, and
+ there is no device add-on interface to replace it with. Provide the
+ subset this app uses, backed by udev (enumerate + hotplug monitor) and
+ the device filesystem:
+ .
+  - device strings, ids, class fields come from /sys/bus/usb/devices;
+  - interfaces and endpoints are read from the sysfs entries named
+    "<device>:<config>.<interface>" and their ep_* directories;
+  - only the active configuration is exposed (the device filesystem
+    keeps descriptors for that one), and class-specific raw descriptors
+    report B_ERROR, so the info window lists none;
+  - roster devices are owned by the roster and kept alive through
+    Stop(), so removal messages already in flight stay matchable.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- /dev/null
++++ b/USBKit.h
+@@ -0,0 +1,166 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ */
++#ifndef _USB_KIT_H_
++#define _USB_KIT_H_
++
++
++#include <List.h>
++#include <OS.h>
++#include <String.h>
++#include <SupportDefs.h>
++
++
++struct udev;
++struct udev_monitor;
++
++
++// Raw descriptor as the info window expects it: a length byte followed by
++// the descriptor bytes. The device filesystem does not expose class-specific
++// descriptors, so this is only ever filled by OtherDescriptorAt(), which
++// reports them as unavailable.
++struct usb_descriptor {
++	struct {
++		uint8	length;
++		uint8	data[255];
++	} generic;
++};
++
++
++class BUSBEndpoint {
++public:
++						BUSBEndpoint(const char* devicePath,
++							const char* interfaceName, const char* name);
++						~BUSBEndpoint();
++
++			uint16		MaxPacketSize() const { return fMaxPacketSize; }
++			uint8		Interval() const { return fInterval; }
++
++			bool		IsBulk() const { return fType == 2; }
++			bool		IsIsochronous() const { return fType == 1; }
++			bool		IsInterrupt() const { return fType == 3; }
++			bool		IsInput() const { return fInput; }
++
++private:
++			uint16		fMaxPacketSize;
++			uint8		fInterval;
++			uint8		fType;	// 0 control, 1 isochronous, 2 bulk, 3 interrupt
++			bool		fInput;
++};
++
++
++class BUSBInterface {
++public:
++						BUSBInterface(const char* devicePath, const char* name);
++						~BUSBInterface();
++
++			uint8		Class() const { return fClass; }
++			uint8		Subclass() const { return fSubclass; }
++			uint8		Protocol() const { return fProtocol; }
++
++			uint32		CountEndpoints() const { return fEndpoints.CountItems(); }
++			const BUSBEndpoint* EndpointAt(uint32 index) const;
++
++			status_t	OtherDescriptorAt(uint32 index, usb_descriptor* descriptor,
++								uint32 size) const;
++
++private:
++			uint8		fClass;
++			uint8		fSubclass;
++			uint8		fProtocol;
++			BList		fEndpoints;	// BUSBEndpoint*, owned
++};
++
++
++class BUSBConfiguration {
++public:
++						BUSBConfiguration(const char* devicePath);
++						~BUSBConfiguration();
++
++			uint32		CountInterfaces() const { return fInterfaces.CountItems(); }
++			const BUSBInterface* InterfaceAt(uint32 index) const;
++
++private:
++			BList		fInterfaces;	// BUSBInterface*, owned
++};
++
++
++class BUSBDevice {
++public:
++	explicit			BUSBDevice(const char* syspath);
++						~BUSBDevice();
++
++			const char*	ProductString() const { return fProduct.String(); }
++			const char*	ManufacturerString() const { return fManufacturer.String(); }
++			const char*	SerialNumberString() const { return fSerial.String(); }
++
++			uint8		Class() const { return fClass; }
++			uint8		Subclass() const { return fSubclass; }
++			uint8		Protocol() const { return fProtocol; }
++			uint16		VendorID() const { return fVendorID; }
++			uint16		ProductID() const { return fProductID; }
++			uint16		Version() const { return fVersion; }
++
++			bool		IsHub() const { return fClass == 9; }
++
++			// sysfs name of the device entry, used for roster bookkeeping
++			const char*	Name() const { return fName.String(); }
++
++			uint32		CountConfigurations() const { return fNumConfigurations; }
++			// Reduced: only the active configuration is exposed, the device
++			// filesystem keeps descriptors for that one alone.
++			const BUSBConfiguration* ConfigurationAt(uint32 index);
++
++private:
++			BString		fName;			// sysfs entry name, e.g. "1-9"
++			BString		fPath;			// absolute sysfs path
++			BString		fProduct;
++			BString		fManufacturer;
++			BString		fSerial;
++			uint8		fClass;
++			uint8		fSubclass;
++			uint8		fProtocol;
++			uint16		fVendorID;
++			uint16		fProductID;
++			uint16		fVersion;
++			uint16		fNumConfigurations;
++			uint16		fActiveConfiguration;
++			BUSBConfiguration*	fConfiguration;	// lazily built, owned
++};
++
++
++// udev-backed stand-in for the legacy USB roster: enumerates usb_device
++// objects, reports additions and removals, owns every BUSBDevice it hands
++// out and keeps removed devices alive until Stop() so messages already in
++// flight stay valid.
++class BUSBRoster {
++public:
++								BUSBRoster();
++	virtual	~BUSBRoster();
++
++			status_t			Start();
++			void				Stop();
++
++	virtual	status_t			DeviceAdded(BUSBDevice* device);
++	virtual	void				DeviceRemoved(BUSBDevice* device);
++
++private:
++	static	int32				_MonitorThread(void* data);
++			void				_ScanDevices();
++			void				_HandleEvent(struct udev_device* device,
++									const char* action);
++			bool				_IsKnown(const char* name) const;
++			bool				_RemoveName(const char* name);
++
++	volatile bool				fRunning;
++			thread_id			fThread;
++			struct udev*		fUdev;
++			struct udev_monitor*	fMonitor;
++			int					fMonitorFd;
++			int					fWakePipe[2];
++			BList				fDevices;	// BUSBDevice*, owned
++			BList				fNames;		// char*, live device names
++};
++
++
++#endif	// _USB_KIT_H_
+--- /dev/null
++++ b/USBKit.cpp
+@@ -0,0 +1,562 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ */
++#include "USBKit.h"
++
++#include <Errors.h>
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <libudev.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/select.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++
++static bool
++read_sysfs_file(const char* path, BString& output)
++{
++	int fd = open(path, O_RDONLY);
++	if (fd < 0)
++		return false;
++
++	char buffer[256];
++	ssize_t bytes = read(fd, buffer, sizeof(buffer) - 1);
++	close(fd);
++	if (bytes <= 0)
++		return false;
++
++	buffer[bytes] = '\0';
++	output.SetTo(buffer);
++	output.Trim();
++	return true;
++}
++
++
++static uint16
++read_sysfs_hex(const char* path)
++{
++	BString value;
++	if (!read_sysfs_file(path, value))
++		return 0;
++
++	return (uint16)strtoul(value.String(), NULL, 16);
++}
++
++
++static uint16
++read_sysfs_dec(const char* path)
++{
++	BString value;
++	if (!read_sysfs_file(path, value))
++		return 0;
++
++	return (uint16)strtoul(value.String(), NULL, 10);
++}
++
++
++BUSBEndpoint::BUSBEndpoint(const char* devicePath, const char* interfaceName,
++	const char* name)
++	:
++	fMaxPacketSize(0),
++	fInterval(0),
++	fType(0),
++	fInput(false)
++{
++	BString path(devicePath);
++	path << "/" << interfaceName << "/" << name << "/";
++
++	BString attribute(path);
++	attribute << "type";
++	BString value;
++	if (read_sysfs_file(attribute.String(), value)) {
++		if (strncmp(value.String(), "Iso", 3) == 0)
++			fType = 1;
++		else if (strncmp(value.String(), "Bul", 3) == 0)
++			fType = 2;
++		else if (strncmp(value.String(), "Int", 3) == 0)
++			fType = 3;
++	}
++
++	attribute = path;
++	attribute << "wMaxPacketSize";
++	fMaxPacketSize = read_sysfs_hex(attribute.String());
++
++	attribute = path;
++	attribute << "bInterval";
++	fInterval = (uint8)read_sysfs_dec(attribute.String());
++
++	attribute = path;
++	attribute << "direction";
++	if (read_sysfs_file(attribute.String(), value))
++		fInput = value == "in";
++}
++
++
++BUSBEndpoint::~BUSBEndpoint()
++{
++}
++
++
++BUSBInterface::BUSBInterface(const char* devicePath, const char* name)
++	:
++	fClass(0),
++	fSubclass(0),
++	fProtocol(0)
++{
++	BString path(devicePath);
++	path << "/" << name;
++
++	BString attribute(path);
++	attribute << "/bInterfaceClass";
++	fClass = (uint8)read_sysfs_dec(attribute.String());
++
++	attribute = path;
++	attribute << "/bInterfaceSubClass";
++	fSubclass = (uint8)read_sysfs_dec(attribute.String());
++
++	attribute = path;
++	attribute << "/bInterfaceProtocol";
++	fProtocol = (uint8)read_sysfs_dec(attribute.String());
++
++	DIR* directory = opendir(path.String());
++	if (directory == NULL)
++		return;
++
++	struct dirent* entry;
++	while ((entry = readdir(directory)) != NULL) {
++		if (strncmp(entry->d_name, "ep_", 3) != 0)
++			continue;
++
++		fEndpoints.AddItem(new BUSBEndpoint(devicePath, name, entry->d_name));
++	}
++	closedir(directory);
++}
++
++
++BUSBInterface::~BUSBInterface()
++{
++	for (int32 i = 0; i < fEndpoints.CountItems(); i++)
++		delete (BUSBEndpoint*)fEndpoints.ItemAt(i);
++	fEndpoints.MakeEmpty();
++}
++
++
++const BUSBEndpoint*
++BUSBInterface::EndpointAt(uint32 index) const
++{
++	return (const BUSBEndpoint*)fEndpoints.ItemAt((int32)index);
++}
++
++
++status_t
++BUSBInterface::OtherDescriptorAt(uint32 /*index*/,
++	usb_descriptor* /*descriptor*/, uint32 /*size*/) const
++{
++	// Class-specific descriptors are not exported by the device filesystem;
++	// the info window simply lists none.
++	return B_ERROR;
++}
++
++
++BUSBConfiguration::BUSBConfiguration(const char* devicePath)
++{
++	DIR* directory = opendir(devicePath);
++	if (directory == NULL)
++		return;
++
++	// Interface entries are named "<device>:<config>.<interface>".
++	struct dirent* entry;
++	while ((entry = readdir(directory)) != NULL) {
++		if (strchr(entry->d_name, ':') == NULL)
++			continue;
++
++		fInterfaces.AddItem(new BUSBInterface(devicePath, entry->d_name));
++	}
++	closedir(directory);
++}
++
++
++BUSBConfiguration::~BUSBConfiguration()
++{
++	for (int32 i = 0; i < fInterfaces.CountItems(); i++)
++		delete (BUSBInterface*)fInterfaces.ItemAt(i);
++	fInterfaces.MakeEmpty();
++}
++
++
++const BUSBInterface*
++BUSBConfiguration::InterfaceAt(uint32 index) const
++{
++	return (const BUSBInterface*)fInterfaces.ItemAt((int32)index);
++}
++
++
++BUSBDevice::BUSBDevice(const char* syspath)
++	:
++	fClass(0),
++	fSubclass(0),
++	fProtocol(0),
++	fVendorID(0),
++	fProductID(0),
++	fVersion(0),
++	fNumConfigurations(0),
++	fActiveConfiguration(0),
++	fConfiguration(NULL)
++{
++	fPath = syspath;
++
++	const char* base = strrchr(syspath, '/');
++	fName = base != NULL ? base + 1 : syspath;
++
++	BString attribute(fPath);
++	attribute << "/idVendor";
++	fVendorID = read_sysfs_hex(attribute.String());
++
++	attribute = fPath;
++	attribute << "/idProduct";
++	fProductID = read_sysfs_hex(attribute.String());
++
++	attribute = fPath;
++	attribute << "/bcdDevice";
++	fVersion = read_sysfs_hex(attribute.String());
++
++	attribute = fPath;
++	attribute << "/bDeviceClass";
++	fClass = (uint8)read_sysfs_dec(attribute.String());
++
++	attribute = fPath;
++	attribute << "/bDeviceSubClass";
++	fSubclass = (uint8)read_sysfs_dec(attribute.String());
++
++	attribute = fPath;
++	attribute << "/bDeviceProtocol";
++	fProtocol = (uint8)read_sysfs_dec(attribute.String());
++
++	attribute = fPath;
++	attribute << "/bNumConfigurations";
++	fNumConfigurations = read_sysfs_dec(attribute.String());
++
++	attribute = fPath;
++	attribute << "/bConfigurationValue";
++	fActiveConfiguration = read_sysfs_dec(attribute.String());
++
++	attribute = fPath;
++	attribute << "/manufacturer";
++	read_sysfs_file(attribute.String(), fManufacturer);
++
++	attribute = fPath;
++	attribute << "/product";
++	read_sysfs_file(attribute.String(), fProduct);
++
++	attribute = fPath;
++	attribute << "/serial";
++	read_sysfs_file(attribute.String(), fSerial);
++}
++
++
++BUSBDevice::~BUSBDevice()
++{
++	delete fConfiguration;
++}
++
++
++const BUSBConfiguration*
++BUSBDevice::ConfigurationAt(uint32 index)
++{
++	if (fNumConfigurations == 0)
++		return NULL;
++	if (index + 1 != fActiveConfiguration)
++		return NULL;
++
++	if (fConfiguration == NULL)
++		fConfiguration = new BUSBConfiguration(fPath.String());
++
++	return fConfiguration;
++}
++
++
++BUSBRoster::BUSBRoster()
++	:
++	fRunning(false),
++	fThread(-1),
++	fUdev(NULL),
++	fMonitor(NULL),
++	fMonitorFd(-1)
++{
++	fWakePipe[0] = -1;
++	fWakePipe[1] = -1;
++}
++
++
++BUSBRoster::~BUSBRoster()
++{
++	Stop();
++
++	for (int32 i = 0; i < fDevices.CountItems(); i++)
++		delete (BUSBDevice*)fDevices.ItemAt(i);
++	fDevices.MakeEmpty();
++
++	for (int32 i = 0; i < fNames.CountItems(); i++)
++		free(fNames.ItemAt(i));
++	fNames.MakeEmpty();
++}
++
++
++status_t
++BUSBRoster::Start()
++{
++	if (fRunning)
++		return B_OK;
++
++	fUdev = udev_new();
++	if (fUdev == NULL)
++		return B_NO_MEMORY;
++
++	fMonitor = udev_monitor_new_from_netlink(fUdev, "udev");
++	if (fMonitor == NULL)
++		fMonitor = udev_monitor_new_from_netlink(fUdev, "kernel");
++
++	if (fMonitor != NULL) {
++		udev_monitor_filter_add_match_subsystem_devtype(fMonitor, "usb", NULL);
++		udev_monitor_enable_receiving(fMonitor);
++		fMonitorFd = udev_monitor_get_fd(fMonitor);
++	}
++
++	fWakePipe[0] = -1;
++	fWakePipe[1] = -1;
++	if (pipe(fWakePipe) != 0) {
++		int32 error = errno;
++		Stop();
++		return error;
++	}
++
++	fRunning = true;
++	fThread = spawn_thread(&BUSBRoster::_MonitorThread, "usb roster",
++		B_NORMAL_PRIORITY, this);
++	if (fThread < 0) {
++		int32 error = fThread;
++		fRunning = false;
++		Stop();
++		return error;
++	}
++
++	resume_thread(fThread);
++	return B_OK;
++}
++
++
++void
++BUSBRoster::Stop()
++{
++	if (!fRunning) {
++		if (fUdev != NULL) {
++			if (fMonitor != NULL)
++				udev_monitor_unref(fMonitor);
++			fMonitor = NULL;
++			fMonitorFd = -1;
++			udev_unref(fUdev);
++			fUdev = NULL;
++		}
++		return;
++	}
++
++	fRunning = false;
++
++	if (fWakePipe[1] >= 0) {
++		char byte = 0;
++		ssize_t written = write(fWakePipe[1], &byte, 1);
++		(void)written;
++	}
++
++	if (fThread >= 0) {
++		int32 result;
++		wait_for_thread(fThread, &result);
++		fThread = -1;
++	}
++
++	for (int32 i = 0; i < 2; i++) {
++		if (fWakePipe[i] >= 0) {
++			close(fWakePipe[i]);
++			fWakePipe[i] = -1;
++		}
++	}
++
++	if (fMonitor != NULL)
++		udev_monitor_unref(fMonitor);
++	fMonitor = NULL;
++	fMonitorFd = -1;
++
++	if (fUdev != NULL)
++		udev_unref(fUdev);
++	fUdev = NULL;
++}
++
++
++status_t
++BUSBRoster::DeviceAdded(BUSBDevice* /*device*/)
++{
++	return B_OK;
++}
++
++
++void
++BUSBRoster::DeviceRemoved(BUSBDevice* /*device*/)
++{
++}
++
++
++int32
++BUSBRoster::_MonitorThread(void* data)
++{
++	BUSBRoster* roster = (BUSBRoster*)data;
++	roster->_ScanDevices();
++
++	while (roster->fRunning) {
++		fd_set set;
++		FD_ZERO(&set);
++		FD_SET(roster->fWakePipe[0], &set);
++		int maxFd = roster->fWakePipe[0];
++
++		if (roster->fMonitorFd >= 0) {
++			FD_SET(roster->fMonitorFd, &set);
++			if (roster->fMonitorFd > maxFd)
++				maxFd = roster->fMonitorFd;
++		}
++
++		struct timeval timeout;
++		timeout.tv_sec = 1;
++		timeout.tv_usec = 0;
++
++		int ready = select(maxFd + 1, &set, NULL, NULL, &timeout);
++		if (ready < 0) {
++			if (errno == EINTR)
++				continue;
++			break;
++		}
++		if (ready == 0)
++			continue;
++
++		if (FD_ISSET(roster->fWakePipe[0], &set))
++			break;
++
++		if (roster->fMonitorFd >= 0
++			&& FD_ISSET(roster->fMonitorFd, &set)) {
++			struct udev_device* device
++				= udev_monitor_receive_device(roster->fMonitor);
++			if (device != NULL) {
++				const char* action = udev_device_get_action(device);
++				roster->_HandleEvent(device, action != NULL ? action : "");
++				udev_device_unref(device);
++			}
++		}
++	}
++
++	return 0;
++}
++
++
++void
++BUSBRoster::_ScanDevices()
++{
++	struct udev_enumerate* enumerate = udev_enumerate_new(fUdev);
++	if (enumerate == NULL)
++		return;
++
++	udev_enumerate_add_match_subsystem(enumerate, "usb");
++	udev_enumerate_scan_devices(enumerate);
++
++	struct udev_list_entry* entry;
++	udev_list_entry_foreach(entry, udev_enumerate_get_list_entry(enumerate)) {
++		struct udev_device* device
++			= udev_device_new_from_syspath(fUdev,
++				udev_list_entry_get_name(entry));
++		if (device != NULL) {
++			_HandleEvent(device, "add");
++			udev_device_unref(device);
++		}
++	}
++
++	udev_enumerate_unref(enumerate);
++}
++
++
++void
++BUSBRoster::_HandleEvent(struct udev_device* device, const char* action)
++{
++	const char* devtype = udev_device_get_devtype(device);
++	if (devtype == NULL || strcmp(devtype, "usb_device") != 0)
++		return;
++
++	const char* name = udev_device_get_sysname(device);
++	if (name == NULL)
++		return;
++
++	if (strcmp(action, "remove") == 0) {
++		// Only devices this roster reported can be removed; fNames is the
++		// list of live names.
++		if (!_RemoveName(name))
++			return;
++
++		// The newest entry wins: a re-plug leaves the older, retired
++		// object in fDevices as well.
++		BUSBDevice* found = NULL;
++		for (int32 i = fDevices.CountItems() - 1; i >= 0; i--) {
++			BUSBDevice* candidate = (BUSBDevice*)fDevices.ItemAt(i);
++			if (strcmp(candidate->Name(), name) == 0) {
++				found = candidate;
++				break;
++			}
++		}
++
++		if (found != NULL)
++			DeviceRemoved(found);
++		return;
++	}
++
++	if (strcmp(action, "add") != 0)
++		return;
++	if (_IsKnown(name))
++		return;
++
++	const char* syspath = udev_device_get_syspath(device);
++	if (syspath == NULL)
++		return;
++
++	BUSBDevice* added = new BUSBDevice(syspath);
++	fNames.AddItem(strdup(name));
++	fDevices.AddItem(added);
++	DeviceAdded(added);
++}
++
++
++bool
++BUSBRoster::_IsKnown(const char* name) const
++{
++	for (int32 i = 0; i < fNames.CountItems(); i++) {
++		if (strcmp((const char*)fNames.ItemAt(i), name) == 0)
++			return true;
++	}
++
++	return false;
++}
++
++
++bool
++BUSBRoster::_RemoveName(const char* name)
++{
++	for (int32 i = 0; i < fNames.CountItems(); i++) {
++		char* known = (char*)fNames.ItemAt(i);
++		if (strcmp(known, name) != 0)
++			continue;
++
++		free(known);
++		fNames.RemoveItem(i);
++		return true;
++	}
++
++	return false;
++}

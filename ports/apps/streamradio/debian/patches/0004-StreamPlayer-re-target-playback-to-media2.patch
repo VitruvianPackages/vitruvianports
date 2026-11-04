@@ -1,0 +1,274 @@
+Description: StreamPlayer: re-target playback to media2's sound player
+ Upstream configured a legacy BMediaFile over the stream and drove a
+ legacy BSoundPlayer from it. media2's BSoundPlayer takes a BMediaFormat
+ and its GetVolumeInfo no longer carries a media_node, so the player
+ half is retargeted accordingly. The decode half stops at the decoder
+ V\OS does not have for byte streams: media2's BMediaFile opens an
+ entry_ref or a BUrl only (its decode path is excluded for this port)
+ and BMediaDecoder is video-only, so _OpenDecoder() reports
+ B_UNSUPPORTED and the state machine stops with the stream shut down.
+ The media_header/media_decode_info/media_codec_info members go with the
+ extractor; media2's headers do not define them.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-21
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+---
+--- a/source/StreamPlayer.h
++++ b/source/StreamPlayer.h
+@@ -18,10 +18,11 @@
+ #define _STREAM_PLAYER_H
+ 
+ 
+-#include <MediaFile.h>
+-#include <SoundPlayer.h>
++#include <Locker.h>
++#include <Looper.h>
+ 
+-#include <MediaIO.h>
++#include <media2/MediaFormat.h>
++#include <media2/SoundPlayer.h>
+ 
+ #include "Station.h"
+ #include "StreamIO.h"
+@@ -58,6 +59,7 @@
+ 
+ private:
+ 	void _SetState(PlayState state);
++	status_t _OpenDecoder();
+ 
+ 	static status_t _StartPlayThreadFunc(StreamPlayer* _this);
+ 	static void _GetDecodedChunk(
+@@ -66,7 +68,6 @@
+ private:
+ 	Station* fStation;
+ 	BLooper* fNotify;
+-	BMediaFile* fMediaFile;
+ 	StreamIO* fStream;
+ 	BSoundPlayer* fPlayer;
+ 	PlayState fState;
+@@ -74,11 +75,7 @@
+ 	status_t fInitStatus;
+ 	bool fStopRequested;
+ 
+-	media_codec_info fCodecInfo;
+ 	media_format fDecodedFormat;
+-	media_header fHeader;
+-	media_decode_info fInfo;
+-	int32 fFlushCount;
+ };
+ 
+ 
+--- a/source/StreamPlayer.cpp
++++ b/source/StreamPlayer.cpp
+@@ -17,9 +17,8 @@
+ 
+ 
+ #include <Catalog.h>
+-#include <MediaDecoder.h>
+-#include <MediaFile.h>
+-#include <MediaTrack.h>
++#include <new>
++#include <string.h>
+ 
+ #include "Debug.h"
+ #include "StreamIO.h"
+@@ -34,15 +33,17 @@
+ 	: BLocker("StreamPlayer"),
+ 	  fStation(station),
+ 	  fNotify(notify),
+-	  fMediaFile(NULL),
++	  fStream(NULL),
+ 	  fPlayer(NULL),
+ 	  fState(StreamPlayer::Stopped),
+-	  fFlushCount(0)
++	  fStopRequested(false)
+ {
+ 	TRACE("Trying to set player for stream %s\n", station->StreamUrl().UrlString().String());
+ 
++	fDecodedFormat.Clear();
++
+ 	fStream = new (std::nothrow) StreamIO(station, notify);
+-	fInitStatus = fStream->Open();
++	fInitStatus = fStream != NULL ? fStream->Open() : B_NO_MEMORY;
+ 	if (fInitStatus != B_OK) {
+ 		MSG("Error retrieving stream from %s - %s\n", station->StreamUrl().UrlString().String(),
+ 			strerror(fInitStatus));
+@@ -55,13 +56,11 @@
+ 
+ StreamPlayer::~StreamPlayer()
+ {
+-	//_SetState(StreamPlayer::Stopped);
+ 	if (fInitStatus == B_OK && fPlayer != NULL)
+ 		fPlayer->Stop(true, false);
+ 
+ 	delete fPlayer;
+ 	delete fStream;
+-	delete fMediaFile;
+ }
+ 
+ 
+@@ -106,12 +105,6 @@
+ 				fPlayer = NULL;
+ 			}
+ 
+-			if (fMediaFile) {
+-				fMediaFile->CloseFile();
+-				delete fMediaFile;
+-				fMediaFile = NULL;
+-			}
+-
+ 			Unlock();
+ 			_SetState(StreamPlayer::Stopped);
+ 
+@@ -130,12 +123,11 @@
+ StreamPlayer::Volume()
+ {
+ 	if (fPlayer != NULL) {
+-		media_node node;
+ 		int32 paramID;
+ 		float minDB, maxDB;
+-		fPlayer->GetVolumeInfo(&node, &paramID, &minDB, &maxDB);
++		fPlayer->GetVolumeInfo(&paramID, &minDB, &maxDB);
+ 
+-		return (fPlayer->VolumeDB(false) - minDB) / (maxDB - minDB);
++		return (fPlayer->VolumeDB() - minDB) / (maxDB - minDB);
+ 	} else
+ 		return 0;
+ }
+@@ -145,10 +137,9 @@
+ StreamPlayer::SetVolume(float volume)
+ {
+ 	if (fPlayer != NULL) {
+-		media_node node;
+ 		int32 paramID;
+ 		float minDB, maxDB;
+-		fPlayer->GetVolumeInfo(&node, &paramID, &minDB, &maxDB);
++		fPlayer->GetVolumeInfo(&paramID, &minDB, &maxDB);
+ 		fPlayer->SetVolumeDB(minDB + volume * (maxDB - minDB));
+ 	}
+ }
+@@ -170,22 +161,23 @@
+ }
+ 
+ 
++status_t
++StreamPlayer::_OpenDecoder()
++{
++	// media2 exposes no decoder for a byte stream: BMediaFile opens an
++	// entry_ref or a BUrl only, and BMediaDecoder is video-only. Without
++	// one there is no PCM format to configure the sound player with.
++	return B_UNSUPPORTED;
++}
++
++
+ void
+ StreamPlayer::_GetDecodedChunk(
+ 	void* cookie, void* buffer, size_t size, const media_raw_audio_format& format)
+ {
+-	StreamPlayer* player = (StreamPlayer*)cookie;
+-	BMediaFile* fMediaFile = player->fMediaFile;
+-
+-	int64 reqFrames
+-		= size / format.channel_count / (format.format & media_raw_audio_format::B_AUDIO_SIZE_MASK);
+-	fMediaFile->TrackAt(0)->ReadFrames(buffer, &reqFrames, &player->fHeader, &player->fInfo);
+-
+-	if (player->fFlushCount++ > 1000) {
+-		player->fFlushCount = 0;
+-		if (player->fStream)
+-			player->fStream->FlushRead();
+-	}
++	// PCM would be pulled from the stream decoder here; until one exists
++	// the player never starts (see _OpenDecoder), so hand out silence.
++	memset(buffer, 0, size);
+ }
+ 
+ 
+@@ -199,68 +191,17 @@
+ 
+ 	_this->_SetState(StreamPlayer::Buffering);
+ 	_this->fStopRequested = false;
+-	_this->fStream->SetLimiter(0x40000);
+-	_this->fMediaFile = new (std::nothrow) BMediaFile(_this->fStream);
+-
+-	_this->fInitStatus = _this->fMediaFile->InitCheck();
+-	if (_this->fInitStatus != B_OK) {
+-		MSG("Error creating media extractor for %s - %s\n",
+-			_this->fStation->StreamUrl().UrlString().String(), strerror(_this->fInitStatus));
+-	}
+-
+-	if (_this->fInitStatus != B_OK || _this->fStopRequested) {
+-		delete _this->fStream;
+-		_this->fStream = NULL;
+-		delete _this->fMediaFile;
+-		_this->fMediaFile = NULL;
+-
+-		_this->Unlock();
+-		_this->_SetState(StreamPlayer::Stopped);
+-
+-		return _this->fInitStatus;
+-	}
+ 
+-	_this->fStream->SetLimiter(0);
+-
+-	if (_this->fMediaFile->CountTracks() == 0) {
+-		MSG("No track found inside stream %s - %s\n",
+-			_this->fStation->StreamUrl().UrlString().String(), strerror(_this->fInitStatus));
+-	}
+-
+-	if (_this->fStopRequested) {
+-		delete _this->fMediaFile;
+-		_this->fMediaFile = NULL;
+-
+-		_this->Unlock();
+-		_this->_SetState(StreamPlayer::Stopped);
+-
+-		return _this->fInitStatus;
+-	}
+-
+-	_this->fInitStatus = _this->fMediaFile->TrackAt(0)->GetCodecInfo(&_this->fCodecInfo);
++	_this->fInitStatus = _this->_OpenDecoder();
+ 	if (_this->fInitStatus != B_OK) {
+ 		MSG("Could not create decoder for %s - %s\n",
+ 			_this->fStation->StreamUrl().UrlString().String(), strerror(_this->fInitStatus));
+ 	}
+ 
+ 	if (_this->fInitStatus != B_OK || _this->fStopRequested) {
+-		delete _this->fMediaFile;
+-		_this->fMediaFile = NULL;
+-
+-		_this->Unlock();
+-		_this->_SetState(StreamPlayer::Stopped);
+-
+-		return _this->fInitStatus;
+-	}
+-
+-	_this->fInitStatus = _this->fMediaFile->TrackAt(0)->DecodedFormat(&_this->fDecodedFormat);
+-	if (_this->fInitStatus != B_OK) {
+-		MSG("Could not negotiate output format - %s\n", strerror(_this->fInitStatus));
+-	}
+-
+-	if (_this->fInitStatus != B_OK || _this->fStopRequested) {
+-		delete _this->fMediaFile;
+-		_this->fMediaFile = NULL;
++		// Nothing will drain the stream: shut the request down.
++		if (_this->fStream != NULL)
++			_this->fStream->Close();
+ 
+ 		_this->Unlock();
+ 		_this->_SetState(StreamPlayer::Stopped);
+@@ -272,8 +213,9 @@
+ 		_this->fDecodedFormat.u.raw_audio.channel_count,
+ 		_this->fDecodedFormat.u.raw_audio.frame_rate);
+ 
+-	_this->fPlayer = new BSoundPlayer(&_this->fDecodedFormat.u.raw_audio,
+-		_this->fStation->Name()->String(), &StreamPlayer::_GetDecodedChunk, NULL, _this);
++	BMediaFormat playFormat(_this->fDecodedFormat.u.raw_audio);
++	_this->fPlayer = new BSoundPlayer(&playFormat, _this->fStation->Name()->String(),
++		&StreamPlayer::_GetDecodedChunk, NULL, _this);
+ 
+ 	_this->fInitStatus = _this->fPlayer->InitCheck();
+ 	if (_this->fInitStatus != B_OK) {

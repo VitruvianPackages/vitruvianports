@@ -1,0 +1,19 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: DeskbarEyes
+Source: https://github.com/HaikuArchives/DeskbarEyes
+
+Files: *
+Copyright: DeskbarEyes author(s)
+License: public-domain
+Comment: the upstream licenses/deskbareyes file carries this statement,
+ reproduced verbatim below.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: public-domain
+Comment: packaging follows the licence of the packaged program.
+
+License: public-domain
+ This application predates our current obsession with licenses.
+  .
+ In the absence of evidence to the contrary, and since source code is supplied, deskbareyes is regarded as Public Domain software. Please contact the author to double-check this status  this if you plan to use this code in your own project.

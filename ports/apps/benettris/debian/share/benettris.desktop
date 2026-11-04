@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=BeNetTris
+GenericName=Tetris
+Comment=Falling-blocks game with network play
+Exec=/system/apps/BeNetTris
+Icon=BeNetTris
+Terminal=false
+StartupNotify=true
+Categories=Game;LogicGame;
+MimeType=application/x-vnd.CKJ.BeNetTris;

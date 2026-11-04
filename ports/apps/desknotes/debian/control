@@ -1,0 +1,14 @@
+Source: desknotes
+Section: editors
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/DeskNotes
+
+Package: desknotes
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: sticky notes on the desktop
+ DeskNotes puts small sticky notes on the desktop.

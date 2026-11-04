@@ -1,0 +1,23 @@
+Description: read the ref device through its accessor
+ V\OS entry_ref hands out identity through device()/directory()/node()
+ accessors; the plain member is not part of the struct here, so the volume
+ lookup does not compile. Calling device() is the intended API and returns
+ the same real dev_t.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/source/entryrefitem.cpp
++++ b/source/entryrefitem.cpp
+@@ -365,7 +365,7 @@
+ {
+ 	PRINT(("EntryRefItem::UpdateFSProperties()\n"));
+ 
+-	BVolume volume (m_ref->device);
++	BVolume volume (m_ref->device());
+ 
+ 	m_fs_readonly = volume.IsReadOnly();
+ 	m_fs_knows_attr = volume.KnowsAttr();

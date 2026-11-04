@@ -1,0 +1,85 @@
+Description: stop the active-window watcher cooperatively
+ MoeActiveWindowWatcher::Stop() killed its polling thread with
+ kill_thread(), which on VOS kills the whole team instead of one thread,
+ and it did so while holding the same lock the loop takes around its
+ state updates. Add a volatile mQuit flag that both polling loops check,
+ set it in Stop() and reap with wait_for_thread() - without holding the
+ lock, so the loop can reach its next check. mThread/mQuit start
+ initialised (-1/false) so stopping a never-run watcher is a no-op.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Moe
+--- a/source/MoeActiveWindowWatcher.h
++++ b/source/MoeActiveWindowWatcher.h
+@@ -71,6 +71,7 @@
+   BRect mCurrentFrame;
+   BString mCurrentApp, mCurrentAppName, mCurrentWin;
+   bool mIsActive;
++  volatile bool mQuit;
+ };
+ 
+ 
+--- a/source/MoeActiveWindowWatcher.cpp
++++ b/source/MoeActiveWindowWatcher.cpp
+@@ -59,8 +59,10 @@
+ 
+ 
+ MoeActiveWindowWatcher::MoeActiveWindowWatcher(void)
+-  : mCurrentFrame(-10000, -10000, -10000, -10000)
++  : mThread(-1)
++  , mCurrentFrame(-10000, -10000, -10000, -10000)
+   , mIsActive(false)
++  , mQuit(false)
+ {
+ }
+ 
+@@ -170,9 +172,17 @@
+ void
+ MoeActiveWindowWatcher::Stop(void)
+ {
+-  this->Lock();
+-  ::kill_thread(mThread);
+-  this->Unlock();
++  // Cooperative stop: kill_thread() would take the whole team on VOS.
++  // Signal the polling loops, then reap. sLocker must not be held here:
++  // the loop takes it around its state updates, and waiting with it held
++  // would deadlock against the very thread being waited for.
++  mQuit = true;
++  if (mThread >= 0)
++    {
++      status_t result;
++      ::wait_for_thread(mThread, &result);
++      mThread = -1;
++    }
+ }
+ 
+ 
+@@ -320,12 +330,16 @@
+ {
+   int32 diff;
+ 
+-  while (true)
++  while (! mQuit)
+     {
+       window_info *win, *active_win;
+       
+       while (! (active_win = ::get_active_window()))
+-	::snooze(MoeProperty::Property()->GetPollingInterval());
++	{
++	  if (mQuit)
++	    return;
++	  ::snooze(MoeProperty::Property()->GetPollingInterval());
++	}
+ 
+       bool active;
+       BRect prevFrame;
+@@ -381,6 +395,9 @@
+ 
+ 	  free (win);
+ 
++	  if (mQuit)
++	    break;
++
+ 	  ::snooze(MoeProperty::Property()->GetPollingInterval());
+ 	}
+       

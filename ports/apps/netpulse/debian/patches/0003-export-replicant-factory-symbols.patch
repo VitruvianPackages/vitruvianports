@@ -1,0 +1,23 @@
+Description: export the replicant factory symbols from the executable
+ The Deskbar resolves a tray item by loading the provider image named in
+ the archive's "add_on" string and looking up instantiate_deskbar_item
+ and the view's Instantiate(BMessage*). A plain executable keeps those
+ symbols in .symtab only, which the loader cannot see, so the replicant
+ would come back grey. Link with -rdynamic so the factory symbols reach
+ the dynamic symbol table - the same export contract the tree's own
+ replicant apps get from the runnable-add-on link rule, which the
+ Makefile-Engine does not implement.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -108,7 +108,7 @@
+ COMPILER_FLAGS =
+ 
+ #	specify additional linker flags
+-LINKER_FLAGS =
++LINKER_FLAGS = -rdynamic
+ 
+ #	specify the version of this particular item
+ #	(for example, -app 3 4 0 d 0 -short 340 -long "340 "`echo -n -e '\302\251'`"1999 GNU GPL")

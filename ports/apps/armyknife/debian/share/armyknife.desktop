@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=ArmyKnife
+GenericName=Audio tag editor
+Comment=Edit audio tags and look up releases on MusicBrainz
+Exec=/system/apps/ArmyKnife
+Icon=ArmyKnife
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Audio;Utility;
+MimeType=application/x-vnd.armyknife;

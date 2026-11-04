@@ -1,0 +1,155 @@
+Description: keep Templates and Licenses out of the application folder
+ Licenses are read from /system/data/Paladin/Licenses. Templates are
+ edited by the user, so they live in the settings folder and are copied
+ from /system/data/Paladin/Templates when missing.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+diff --git a/Paladin/Globals.cpp b/Paladin/Globals.cpp
+index 2b982f5..3994420 100644
+--- a/Paladin/Globals.cpp
++++ b/Paladin/Globals.cpp
+@@ -14,6 +14,7 @@
+ #include "DebugTools.h"
+ #include "DPath.h"
+ #include "FileFactory.h"
++#include "LaunchHelper.h"
+ #include "Globals.h"
+ #include "Project.h"
+ #include "Settings.h"
+@@ -132,21 +133,42 @@ InitGlobals(void)
+ }
+ 
+ 
++// Editable templates live in the user's settings, seeded from the system data.
++DPath
++UserTemplatesPath(void)
++{
++	DPath path(B_USER_SETTINGS_DIRECTORY);
++	path << "Paladin/Templates";
++
++	BDirectory dir(path.GetFullPath());
++	if (dir.InitCheck() != B_OK || dir.CountEntries() == 0) {
++		create_directory(path.GetFullPath(), 0755);
++		BDirectory system("/system/data/Paladin/Templates");
++		if (system.InitCheck() == B_OK) {
++			ShellHelper shell("cp -r --no-preserve=mode,ownership ");
++			shell << "'/system/data/Paladin/Templates'/.";
++			shell.AddQuotedArg(path.GetFullPath());
++			shell.Run();
++		}
++	}
++	return path;
++}
++
++
+ void
+ EnsureTemplates(void)
+ {
+ 	// Because creating a new project depends on the existence of the Templates folder,
+ 	// make sure that we have some (very) basic templates to work with if the folder
+ 	// has been deleted.
+-	DPath templatePath = gAppPath.GetFolder();
+-	templatePath << "Templates";
++	DPath templatePath = UserTemplatesPath();
+ 	
+ 	bool missing = false;
+ 	BDirectory tempDir;
+ 	if (!BEntry(templatePath.GetFullPath()).Exists())
+ 	{
+-		BDirectory appDir(gAppPath.GetFolder());
+-		appDir.CreateDirectory("Templates", &tempDir);
++		create_directory(templatePath.GetFullPath(), 0755);
++		tempDir.SetTo(templatePath.GetFullPath());
+ 		missing = true;
+ 	}
+ 	else
+diff --git a/Paladin/Globals.h b/Paladin/Globals.h
+index 2d090a9..80bd1e0 100644
+--- a/Paladin/Globals.h
++++ b/Paladin/Globals.h
+@@ -23,6 +23,7 @@ class StatCache;
+ 
+ void		InitGlobals(void);
+ void		EnsureTemplates(void);
++DPath		UserTemplatesPath(void);
+ entry_ref	MakeProjectFile(DPath folder, const char *name,
+ 							const char *data = NULL,
+ 							const char *type = NULL);
+diff --git a/Paladin/LicenseManager.cpp b/Paladin/LicenseManager.cpp
+index 3014a60..28cf02f 100644
+--- a/Paladin/LicenseManager.cpp
++++ b/Paladin/LicenseManager.cpp
+@@ -140,8 +140,7 @@ LicenseManager::MessageReceived(BMessage* message)
+ void
+ LicenseManager::ScanLicenses()
+ {
+-	DPath licensepath(gAppPath.GetFolder());
+-	licensepath << "Licenses";
++	DPath licensepath("/system/data/Paladin/Licenses");
+ 
+ 	BDirectory directory(licensepath.GetFullPath());
+ 
+diff --git a/Paladin/Paladin.cpp b/Paladin/Paladin.cpp
+index 76e64d1..aa9a39b 100644
+--- a/Paladin/Paladin.cpp
++++ b/Paladin/Paladin.cpp
+@@ -640,8 +640,12 @@ App::CreateNewProject(const BMessage &settings)
+ 		BString projectFileName(projectName);
+ 		projectFileName << ".pld";
+ 		
+-		DPath templatePath(gAppPath.GetFolder());
+-		templatePath << "Templates" << templateName;
++		DPath templatePath = UserTemplatesPath();
++		templatePath << templateName;
++		if (!BEntry(templatePath.GetFullPath()).Exists()) {
++			templatePath.SetTo("/system/develop/Paladin/Templates");
++			templatePath << templateName;
++		}
+ 		
+ 		// Copy the contents of the chosen template folder to the project path
+ 		DPath sourcePath(templatePath);
+diff --git a/Paladin/TemplateWindow.cpp b/Paladin/TemplateWindow.cpp
+index 623d386..0059ecb 100644
+--- a/Paladin/TemplateWindow.cpp
++++ b/Paladin/TemplateWindow.cpp
+@@ -63,10 +63,7 @@ TemplateWindow::TemplateWindow(const BRect& frame)
+ 	
+ 	CheckTemplates();
+ 	
+-	DPath templatePath(gAppPath.GetFolder());
+-	// Translating the folder causes a bug. See #286
+-	//templatePath << B_TRANSLATE("Templates");
+-	templatePath << "Templates";
++	DPath templatePath = UserTemplatesPath();
+ 	fTempList.ScanFolder(templatePath.GetFullPath());
+ 	
+ 	// Reuse default english folder if no translated folder is found
+@@ -78,16 +75,7 @@ TemplateWindow::TemplateWindow(const BRect& frame)
+ 	}
+ 	*/
+ 	
+-	// #312 allow user specified templates (V\OS: the settings directory is
+-	// wherever find_directory resolves the current user's home to)
+-	BPath userSettings;
+-	if (find_directory(B_USER_SETTINGS_DIRECTORY, &userSettings) == B_OK) {
+-		userSettings.Append("Paladin");
+-		userSettings.Append("Templates");
+-		fTempList.ScanFolder(userSettings.Path());
+-	}
+-	// And allow other packages to install Paladin templates too
+-	fTempList.ScanFolder("/system/data/Paladin/Templates");
++	// Other packages may install Paladin templates too
+ 	fTempList.ScanFolder("/system/develop/Paladin/Templates");
+ 
+ 	// project type
+@@ -299,8 +287,7 @@ TemplateWindow::CheckTemplates(void)
+ 	// and if it doesn't exist or it's empty, we make sure that it exists and
+ 	// at least has empty project templates for each of the four basic types of projects
+ 
+-	DPath templatePath(gAppPath.GetFolder());
+-	templatePath << "Templates";
++	DPath templatePath = UserTemplatesPath();
+ 
+ 	bool needInit = false;
+ 	if (!BEntry(templatePath.GetFullPath()).Exists())

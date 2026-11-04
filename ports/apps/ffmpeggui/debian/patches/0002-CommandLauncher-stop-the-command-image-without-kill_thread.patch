@@ -1,0 +1,69 @@
+Description: stop the command image by signal instead of kill_thread()
+ kill_thread() stops the whole team on V\OS, so neither the Stop button
+ nor the decode-error path may use it. The command runs as a load_image()
+ team in its own process group (setpgid() in _RunCommand); signal that
+ group and the image instead. When the child dies the pipe write ends go
+ away, the reader loop sees EOF, and the command thread finishes through
+ wait_for_thread(). fThread is initialised and reset around its life so a
+ stop can never signal a stale id, and wait_for_thread() is guarded so a
+ failed load_image cannot block the command thread.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/ffmpegGUI
+
+--- a/source/CommandLauncher.cpp
++++ b/source/CommandLauncher.cpp
+@@ -15,6 +15,7 @@
+ #include <array>
+ #include <cstdio>
+ #include <iostream>
++#include <signal.h>
+ #include <unistd.h>
+ 
+ 
+@@ -26,6 +27,7 @@
+ 	fFinishMessage(NULL)
+ {
+ 	fBusy = false;
++	fThread = -1;
+ 	fErrorCode = 0;
+ 	Run();
+ }
+@@ -39,7 +41,15 @@
+ 		{
+ 			if (fBusy) {
+ 				fErrorCode = ABORTED;
+-				kill_thread(fThread);
++				// kill_thread() would stop the whole team on V\OS. The
++				// command runs as its own image in its own process group
++				// (setpgid() in _RunCommand); signal group and image so
++				// the pipes reach EOF, the reader loop breaks and the
++				// command thread exits through wait_for_thread().
++				if (fThread > 0) {
++					kill(-fThread, SIGKILL);
++					kill(fThread, SIGKILL);
++				}
+ 			}
+ 			break;
+ 		}
+@@ -183,7 +193,8 @@
+ 			BString output_string(buffer);
+ 			if (output_string.FindFirst("Error while decoding stream") != B_ERROR) {
+ 				fErrorCode = FAILED;
+-				kill_thread(fThread);
++				kill(-fThread, SIGKILL);
++				kill(fThread, SIGKILL);
+ 				break;
+ 			}
+ 		}
+@@ -196,7 +207,9 @@
+ 	close(stdout_pipe[0]);
+ 
+ 	status_t proc_exit_code = 0;
+-	wait_for_thread(fThread, &proc_exit_code);
++	if (fThread > 0)
++		wait_for_thread(fThread, &proc_exit_code);
++	fThread = -1;
+ 
+ 	// inform target that the command has finished
+ 	if (fErrorCode != SUCCESS)

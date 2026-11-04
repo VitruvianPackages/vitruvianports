@@ -1,0 +1,23 @@
+Description: build the binary into obj/ where the packaging class expects it
+ The project sets TARGET_DIR=.. so a developer build drops the binary next
+ to the themes/ directory at the project root. The vos_makefile_engine
+ packaging class installs obj/<NAME> to /system/apps/<NAME> (and compiles
+ the catalogs under obj/), so a binary at the project root cannot be
+ packaged: dh_auto_install would look for obj/BeMines and fail. Drop the
+ line: the engine already defaults TARGET_DIR to OBJ_DIR when it is unset,
+ which is the layout every other class-1 port uses. The package still ships
+ themes/ beside the installed binary (debian/bemines.install), which is
+ where the app scans for them at runtime.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/BeMines
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -6,7 +6,6 @@
+ 
+ # The name of the binary.
+ NAME = BeMines
+-TARGET_DIR = ..
+ 
+ # The type of binary, must be one of:
+ #	APP:	Application

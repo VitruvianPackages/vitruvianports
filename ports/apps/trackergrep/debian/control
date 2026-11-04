@@ -1,0 +1,17 @@
+Source: trackergrep
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/TrackerGrep
+
+Package: trackergrep
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: text-search Tracker add-on for V\OS
+ TrackerGrep adds a right-click Tracker action that greps the selected
+ files or folders and lists every match together with its matching
+ lines; the grep window runs as a stand-alone application spawned by
+ the add-on itself.

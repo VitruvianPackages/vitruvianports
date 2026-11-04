@@ -1,0 +1,16 @@
+Source: moe
+Section: misc
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, zlib1g-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Moe
+
+Package: moe
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: desktop mascot companion for V\OS
+ Moe is a small companion creature that sits on the desktop: it watches
+ the active window, can be dragged around, carries per-file attributes
+ for size and motion, and ships with anime-style animations.

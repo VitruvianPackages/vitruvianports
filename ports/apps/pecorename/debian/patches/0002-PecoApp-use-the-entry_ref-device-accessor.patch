@@ -1,0 +1,46 @@
+Description: use the entry_ref device() accessor
+ On V\OS entry_ref::device is a member function, not a plain field, so
+ the four field reads in PecoApp.cpp do not compile ("invalid use of
+ member function 'dev_t entry_ref::device() const'"). The accessor
+ returns the real device value and == compares real identity, which is
+ the documented V\OS contract for these rewrites; the legacy numeric
+ gates (>1 "usable volume", ==1 "skip device refs") now compare against
+ real device ids by that same contract.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/PecoRename
+
+--- a/Main/PecoApp.cpp
++++ b/Main/PecoApp.cpp
+@@ -213,11 +213,11 @@
+ 
+ 	// Find path
+ 	for (int i = 0; msg->FindRef("refs", i, &ref) == B_OK; i++) {
+-		if (ref.device > 1)
++		if (ref.device() > 1)
+ 			break;
+ 	}
+ 
+-	BVolume volume(ref.device);
++	BVolume volume(ref.device());
+ 	if (volume.IsReadOnly()) {
+ 		BAlert* myAlert = new BAlert(NULL,
+ 			B_TRANSLATE("The volume is read only: files cannot be renamed."), B_TRANSLATE("OK"));
+@@ -230,7 +230,7 @@
+ 	ChooseButton->SetFlat(true);
+ 	fWindow->Unlock();
+ 
+-	if (ref.device > 1) {
++	if (ref.device() > 1) {
+ 		New();
+ 
+ 		aEntry = BEntry(&ref);
+@@ -260,7 +260,7 @@
+ 			fWindow->Unlock();
+ 
+ 			// filter out devices
+-			if (ref.device == 1)
++			if (ref.device() == 1)
+ 				continue;
+ 
+ 			// filter out files with wrong path

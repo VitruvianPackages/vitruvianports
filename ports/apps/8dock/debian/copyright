@@ -1,0 +1,40 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: 8Dock
+Source: https://github.com/HaikuArchives/8Dock
+
+Files: *
+Copyright: 1999-2002, Jón Ragnarsson <jonr@vortex.is>
+           2002, Michael Pfeiffer (bug fixes for 0.9.4/0.9.5)
+           Hirosima Kato (TrackerMenu classes, credited in
+           src/!Read This!)
+License: NO-UPSTREAM-LICENSE
+ Upstream ships no license file, no licence headers and no licence text
+ anywhere in the repository (verified with a case-insensitive search for
+ "license"/"permission is hereby"/"all rights reserved" over every file:
+ zero hits). The sources are therefore all-rights-reserved by default;
+the public GitHub mirror shows the author distributing the source. This
+ packaging does not add or change any licence terms; the upstream
+ author would need to state terms for redistribution beyond that.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.

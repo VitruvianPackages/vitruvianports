@@ -1,0 +1,16 @@
+Source: hexvexed
+Section: games
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/HexVexed
+
+Package: hexvexed
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: hexagonal tile puzzle game
+ HexVexed is a hexagon-based tile puzzle: place numbered hex tiles on the
+ grid so the numbers match wherever two tiles touch, with number bases from
+ binary to hexadecimal, a timer and best-times tables.

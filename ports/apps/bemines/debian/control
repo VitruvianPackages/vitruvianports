@@ -1,0 +1,15 @@
+Source: bemines
+Section: games
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BeMines
+
+Package: bemines
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Minesweeper game for V\OS
+ BeMines is a Minesweeper game with themes, achievements, custom board
+ sizes, sonar ping and localized UI.

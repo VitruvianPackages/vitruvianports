@@ -1,0 +1,3 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+# A real copy in usr/bin keeps the package usable from PATH.
+obj/Calendar usr/bin/

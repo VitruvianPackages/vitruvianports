@@ -1,0 +1,7 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine --sourcedirectory=source
+
+# the first rule in the makefile builds an .hpkg
+override_dh_auto_build:
+	dh_auto_build -- default

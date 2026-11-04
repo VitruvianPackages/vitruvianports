@@ -1,0 +1,117 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: BeSpider
+Source: https://github.com/HaikuArchives/BeSpider
+
+Files: *
+Copyright: 2013-2017 Przemysław Buczkowski <przemub@przemub.pl>
+           2013-2014 KlondikeView contributors
+           2015 SolitareView and SelectorWindow contributors
+           2022 Javier Steinaker <jsteinaker@gmail.com>
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+
+Files: Artwork/1_club.png Artwork/1_diamond.png Artwork/1_heart.png
+       Artwork/1_spade.png Artwork/2_club.png Artwork/2_diamond.png
+       Artwork/2_heart.png Artwork/2_spade.png Artwork/3_club.png
+       Artwork/3_diamond.png Artwork/3_heart.png Artwork/3_spade.png
+       Artwork/4_club.png Artwork/4_diamond.png Artwork/4_heart.png
+       Artwork/4_spade.png Artwork/5_club.png Artwork/5_diamond.png
+       Artwork/5_heart.png Artwork/5_spade.png Artwork/6_club.png
+       Artwork/6_diamond.png Artwork/6_heart.png Artwork/6_spade.png
+       Artwork/7_club.png Artwork/7_diamond.png Artwork/7_heart.png
+       Artwork/7_spade.png Artwork/8_club.png Artwork/8_diamond.png
+       Artwork/8_heart.png Artwork/8_spade.png Artwork/9_club.png
+       Artwork/9_diamond.png Artwork/9_heart.png Artwork/9_spade.png
+       Artwork/10_club.png Artwork/10_diamond.png Artwork/10_heart.png
+       Artwork/10_spade.png Artwork/11_club.png Artwork/11_diamond.png
+       Artwork/11_heart.png Artwork/11_spade.png Artwork/12_club.png
+       Artwork/12_diamond.png Artwork/12_heart.png Artwork/12_spade.png
+       Artwork/13_club.png Artwork/13_diamond.png Artwork/13_heart.png
+       Artwork/13_spade.png
+Copyright: 2008 David Bellot, Brandon Ardiente
+License: LGPL-2.1
+ This collection of card faces is free software: you can redistribute it
+ and/or modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation, either version
+ 2.1 of the License, or (at your option) any later version.
+ .
+ The complete, unmodified license text ships with the common-licenses
+ package as /usr/share/common-licenses/LGPL-2.1, and upstream ships it
+ verbatim as Artwork/COPYING.
+
+Files: Artwork/fanfare.wav Artwork/shuffle.wav
+Copyright: 2009 Anthony Batiste
+License: CC-BY-3.0
+ You are free to copy, distribute, display, perform, remix and make
+ derivative works based on this recording, provided that you give
+ attribution to the creator. The full license text is at
+ https://creativecommons.org/licenses/by/3.0/ .
+ .
+ Upstream's About dialog credits only the fanfare (c) 2009 Anthony
+ Batiste under CC-BY-3.0; both wavs entered the tree in the same
+ "sounds" commit.
+
+Files: Artwork/back.png Artwork/empty.png Artwork/BeSpider_icon
+Copyright: 2013 Przemysław Buczkowski <przemub@przemub.pl>
+           2014 Wassim (vector icon, GCI contribution)
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining
+ a copy of this software and associated documentation files (the
+ "Software"), to deal in the Software without restriction, including
+ without limitation the rights to use, copy, modify, merge, publish,
+ distribute, sublicense, and/or sell copies of the Software, and to
+ permit persons to whom the Software is furnished to do so, subject to
+ the following conditions:
+ .
+ The above copyright notice and this permission notice shall be
+ included in all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS
+ BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.

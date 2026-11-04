@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=Weather
+GenericName=Weather forecast
+Comment=Forecast for the cities you pick, from the Open-Meteo API
+Exec=/system/apps/Weather
+Icon=Weather
+Terminal=false
+StartupNotify=true
+Categories=Utility;Meteorology;
+MimeType=x-vnd.przemub.Weather;

@@ -1,0 +1,15 @@
+Source: bsnow
+Section: graphics
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BSnow
+
+Package: bsnow
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: falling-snow desktop effect for V\OS
+ BSnow sprinkles animated snow flakes over the desktop view (with a
+ fallen-snow strip and a dragger), as a small always-on effect window.

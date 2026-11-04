@@ -1,0 +1,33 @@
+Description: GameStyle: build the owning style list with the current API
+ The owning flag of BObjectList became a template parameter in the current
+ system API (legacy commit cbfbbf6d4d, 2025-02-05) and the two-argument
+ constructor was removed, so GameStyle.cpp stopped compiling with
+ "no matching function for call to 'BObjectList<StyleData>::BObjectList(int,
+ bool)'". Declare the list owning through the template parameter and drop
+ the flag from the constructor: items-per-block (20) and ownership are
+ unchanged, so the StyleData objects are still deleted with the list.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/BeMines
+--- a/src/GameStyle.h
++++ b/src/GameStyle.h
+@@ -89,7 +89,7 @@
+ 	BBitmap*		fNumbers[8];
+ 	BBitmap*		fLEDNumbers[10];
+ 
+-	BObjectList<StyleData>	fStyleList;
++	BObjectList<StyleData, true>	fStyleList;
+ 
+ 	BString			fStyleName;
+ };
+--- a/src/GameStyle.cpp
++++ b/src/GameStyle.cpp
+@@ -43,7 +43,7 @@
+ 	fNotMineSprite(NULL),
+ 	fFlagSprite(NULL),
+ 	fQuestionSprite(NULL),
+-	fStyleList(20, true),
++	fStyleList(20),
+ 	fStyleName("Default")
+ {
+ 	int32 i;

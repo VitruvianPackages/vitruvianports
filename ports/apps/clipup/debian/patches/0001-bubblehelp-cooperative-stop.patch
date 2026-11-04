@@ -1,0 +1,77 @@
+Description: stop the BubbleHelp watcher thread cooperatively
+ ~BubbleHelp() killed its polling helper with kill_thread(), which on
+ VOS takes the whole team, and it did so while holding the helper's own
+ window lock - the helper takes that lock in short sections, so a
+ wait-for-thread under that lock would deadlock. Set a volatile fQuit
+ flag the helper's two poll loops check, reap with wait_for_thread()
+ without holding the lock, then quit the window as before; the flag is
+ initialised in the constructor and the startup wait honours it too.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/ClipUp
+--- a/Main/BubbleHelp.h
++++ b/Main/BubbleHelp.h
+@@ -34,8 +34,9 @@
+ 
+ bool				IsKeyDown();
+ 
+-thread_id			helperthread;
+-BList				*helplist;
++	thread_id			helperthread;
++	volatile bool		fQuit;
++	BList				*helplist;
+ BWindow				*textwin;
+ BTextView			*textview;
+ BView				*gfxview;
+--- a/Main/BubbleHelp.cpp
++++ b/Main/BubbleHelp.cpp
+@@ -51,6 +51,7 @@
+ 
+ BubbleHelp::BubbleHelp()
+ {
++	fQuit = false;
+ 	// You only need one instance per application.
+ 	if(atomic_add(&runcount,1) == 0)
+ 	{
+@@ -71,12 +72,15 @@
+ {
+ 
+ 	if (helperthread >= 0) {
+-	
+-		// force helper thread into a known state
+-		bool locked = textwin->Lock();
+-		// Be rude...
+-		kill_thread(helperthread);
+-		// dispose of window
++		// Cooperative stop: VOS has no usable kill_thread (it would take
++		// the whole team). Signal the polling loop, reap it without
++		// holding textwin's lock - the helper takes that lock in short
++		// sections, so waiting with it held would deadlock - then
++		// dispose of the window as before.
++		fQuit = true;
++		status_t result;
++		wait_for_thread(helperthread, &result);
++		bool locked = textwin != NULL && textwin->Lock();
+ 		if(locked)
+ 		{
+ 			textwin->PostMessage(B_QUIT_REQUESTED);
+@@ -237,7 +241,9 @@
+ {
+ 	// Wait until the BApplication becomes valid, in case
+ 	// someone creates this as a global variable.
+-	while(!be_app_messenger.IsValid()) snooze(200000);
++	while(!be_app_messenger.IsValid() && !fQuit) snooze(200000);
++	if (fQuit)
++		return;
+ 	
+ 	textwin = new BWindow(BRect(0,0,10,10),"",B_NO_BORDER_WINDOW_LOOK, B_FLOATING_ALL_WINDOW_FEEL,
+ 				B_NOT_MOVABLE|B_AVOID_FOCUS);
+@@ -259,7 +265,7 @@
+ 	ulong delaycounter = 0;
+ 	BPoint lastwhere;
+ 
+-	while(be_app_messenger.IsValid()) {
++	while(be_app_messenger.IsValid() && !fQuit) {
+ 
+ 		if (textwin->Lock()) {
+ 		

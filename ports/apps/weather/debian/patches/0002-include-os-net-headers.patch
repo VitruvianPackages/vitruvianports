@@ -1,0 +1,24 @@
+Description: Add the os/net header dir to SYSTEM_INCLUDE_PATHS
+ The netservices private headers pulled in by this app
+ (private/netservices/UrlContext.h) include <Certificate.h>, which lives
+ in /system/develop/headers/os/net — a directory the packaged vos.specs
+ (data/develop/vos.specs on vos master) does not put on the include path,
+ unlike every other kit dir. Without it the build stops at:
+   /system/develop/headers/private/netservices/UrlContext.h:11:10:
+   fatal error: Certificate.h: No such file or directory
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: V\OS port of HaikuArchives/Weather
+
+--- a/Makefile
++++ b/Makefile
+@@ -75,7 +75,8 @@
+ #	NOT auto-included here.
+ SYSTEM_INCLUDE_PATHS = /system/develop/headers/private/shared \
+ 					   /system/develop/headers/private/interface \
+-					   /system/develop/headers/private/netservices
++					   /system/develop/headers/private/netservices \
++					   /system/develop/headers/os/net
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are

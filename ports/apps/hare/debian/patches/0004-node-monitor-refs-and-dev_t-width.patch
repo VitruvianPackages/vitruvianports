@@ -1,0 +1,236 @@
+Description: read node-monitor messages through the virtual ref fields
+ V\OS node-monitor messages carry no node/directory/device integer fields
+ (device is uint64 when present at all); upstream's FindInt64("node"),
+ FindInt32("device"), FindInt64("from/to directory") reads compile but never
+ match, so the add-ons watcher, the list renames and the remove handler
+ silently do nothing. Read FindNodeRef("virtual:node") and
+ FindRef("virtual:directory"/"virtual:from directory"/"virtual:to
+ directory") instead and stop rebuilding refs from integers. The
+ B_DEVICE_MOUNTED/UNMOUNTED device values are uint64 now (FindUInt64), and
+ the app's own device messages follow V\OS's 64-bit dev_t instead of int32.
+ entry_ref/node_ref fields are accessors on V\OS, so the surviving field
+ reads become device()/node() calls (real-identity values, == compares real
+ identity); no ref field is assigned anywhere anymore.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- a/src/Hare/AppView.cpp
++++ b/src/Hare/AppView.cpp
+@@ -200,9 +200,9 @@
+ 			listView->DeselectAll();
+ 			break;
+ 		case REMOVE_MSG: {
+-				int32 device;
+-				if ((message->FindInt32("device", &device) == B_OK)) {
+-					RemoveDeviceItemsFromList(device);
++				int64 device;
++				if ((message->FindInt64("device", &device) == B_OK)) {
++					RemoveDeviceItemsFromList((dev_t)device);
+ 				} else {
+ 					thread_id thread = spawn_thread(AppView::RemoveItemsFromList,
+ 													"RemoveItems", B_NORMAL_PRIORITY, (void*)this);
+@@ -263,12 +263,9 @@
+ 					case B_ENTRY_REMOVED: {
+ 							node_ref nref;
+ 
+-							if (message->FindInt64("node", &nref.node) != B_OK) {
+-								break;
+-							}
+-							if (message->FindInt32("device", &nref.device) != B_OK) {
+-								break;
+-							}
++							if (message->FindNodeRef("virtual:node", &nref) != B_OK) {
++									break;
++								}
+ 							RemoveNodeFromList(&nref);
+ 						}
+ 						break;
+@@ -366,7 +363,7 @@
+ 
+ 	row->SetField(new BStringField(ref->name), FILE_COLUMN_INDEX);
+ 
+-	BVolume volume(ref->device);
++	BVolume volume(ref->device());
+ 	fs_info fsinfo;
+ 	fs_stat_dev(volume.Device(), &fsinfo);
+ 	if (strcmp(fsinfo.fsh_name, "cdda") == 0) {
+@@ -583,9 +580,9 @@
+ }
+ 
+ void
+-AppView::RemoveDeviceItemsFromList(int32 device)
++AppView::RemoveDeviceItemsFromList(dev_t device)
+ {
+-	PRINT(("AppView::RemoveDeviceItemsFromList(int32)\n"));
++	PRINT(("AppView::RemoveDeviceItemsFromList(dev_t)\n"));
+ 
+ 	bool deleted = false;
+ 	BRefRow* row;
+@@ -595,7 +592,7 @@
+ 		row = (BRefRow*)listView->RowAt(i);
+ 		if (row) {
+ 			ref = row->EntryRef();
+-			if (device == ref->device) {
++			if (device == ref->device()) {
+ 				deleted = true;
+ 				watch_node(row->NodeRef(), B_STOP_WATCHING, this);
+ 				listView->Deselect(listView->RowAt(i));
+@@ -643,38 +640,20 @@
+ {
+ 	PRINT(("AppView::UpdateItem(BMessage*)\n"));
+ 
+-	ino_t node;
+-	ino_t dir;
+-	dev_t dev;
+-	const char* name;
+-
+-	if (message->FindInt64("node", &node) != B_OK) {
+-		return B_ERROR;
+-	}
+-
+-	if (message->FindInt64("to directory", &dir) != B_OK) {
+-		return B_ERROR;
+-	}
++	node_ref nref;
++	entry_ref eref;
+ 
+-	if (message->FindInt32("device", &dev) != B_OK) {
++	if (message->FindNodeRef("virtual:node", &nref) != B_OK) {
+ 		return B_ERROR;
+ 	}
+ 
+-	if (message->FindString("name", &name) != B_OK) {
++	if (message->FindRef("virtual:to directory", &eref) != B_OK) {
+ 		return B_ERROR;
+ 	}
+ 
+-	PRINT(("device = %d\n", dev));
+-
+-	node_ref nref;
+-	entry_ref eref;
+-
+-	nref.device = dev;
+-	nref.node = node;
+-
+-	eref.device = dev;
+-	eref.directory = dir;
+-	eref.set_name(name);
++	ino_t node = nref.node();
++	dev_t dev = eref.device();
++	const char* name = eref.name;
+ 
+ 	bool doVolume = false;
+ 	if (dev == 1) {
+@@ -700,8 +679,8 @@
+ 	for (int i = 0; i < max; i++) {
+ 		row = (BRefRow*)listView->RowAt(i);
+ 		if (row) {
+-			PRINT(("item's device = %d\n", row->NodeRef()->device));
+-			if (row->NodeRef()->node == node) {
++			PRINT(("item's device\n"));
++			if (row->NodeRef()->node() == node) {
+ 				row->SetNodeRef(&nref);
+ 				row->SetEntryRef(&eref);
+ 				if (LockLooper()) {
+@@ -709,7 +688,7 @@
+ 					listView->Invalidate();
+ 					UnlockLooper();
+ 				}
+-			} else if (doVolume && (row->NodeRef()->device == dev)) {
++			} else if (doVolume && (row->NodeRef()->device() == dev)) {
+ 				if (LockLooper()) {
+ 					InitializeColumn(row);
+ 					listView->Invalidate();
+--- a/src/Hare/AppView.h
++++ b/src/Hare/AppView.h
+@@ -34,7 +34,7 @@
+ 	void SetSaveAsColumn(BRefRow* row);
+ 	void ApplyAttributeChanges(BMessage* message);
+ 	void RemoveNodeFromList(node_ref* ref);
+-	void RemoveDeviceItemsFromList(int32 device);
++	void RemoveDeviceItemsFromList(dev_t device);
+ 	BString ReplaceInvalidFileChars(BString filestr, int32 swaptype);
+ 	int32 UpdateItem(BMessage* message);
+ 	static int32 RefsRecievedWrapper(void* args);
+--- a/src/Hare/AppWindow.cpp
++++ b/src/Hare/AppWindow.cpp
+@@ -183,7 +183,7 @@
+ 		fs_stat_dev(volume.Device(), &info);
+ 		if (strcmp(info.fsh_name, "cdda") == 0) {
+ 			BMessage* menuMessage = new BMessage(MENU_ITEM_SELECTED);
+-			menuMessage->AddInt32("dev", volume.Device());
++			menuMessage->AddInt64("dev", volume.Device());
+ 			loadCdMenu->AddItem(new BMenuItem(info.volume_name, menuMessage,
+ 											  shortcut, B_COMMAND_KEY));
+ 			shortcut++;
+@@ -318,9 +318,9 @@
+ 			}
+ 		} else if (strcmp(menu->Name(), LOAD_CD_SUBMENU) == 0) {
+ 			PRINT(("CD SELECTED: %s\n", item->Label()));
+-			dev_t dev;
+-			if (message->FindInt32("dev", &dev) == B_OK) {
+-				AddVolumeToList(dev);
++			int64 devRaw;
++			if (message->FindInt64("dev", &devRaw) == B_OK) {
++				AddVolumeToList((dev_t)devRaw);
+ 			} else {
+ 				AddVolumeToList(item->Label());
+ 			}
+@@ -446,19 +446,17 @@
+ 							node_ref addon_ref;
+ 							addonDir.GetNodeRef(&addon_ref);
+ 
+-							dev_t device;
+-							message->FindInt32("device", &device);
+-							PRINT(("DEVICE FROM MSG = %d\n", device));
+-
+-							ino_t from_node_num;
+-							message->FindInt64("from directory", &from_node_num);
+-
+-							ino_t to_node_num;
+-							message->FindInt64("to directory", &to_node_num);
+-
+-							if ((addon_ref.device == device)
+-									&& ((addon_ref.node == from_node_num)
+-										|| (addon_ref.node == to_node_num))) {
++							entry_ref fromRef;
++						entry_ref toRef;
++						bool hasFrom = message->FindRef("virtual:from directory",
++								&fromRef) == B_OK;
++						bool hasTo = message->FindRef("virtual:to directory",
++								&toRef) == B_OK;
++
++						if ((hasFrom && fromRef.device() == addon_ref.device()
++								&& fromRef.directory() == addon_ref.node())
++								|| (hasTo && toRef.device() == addon_ref.device()
++								&& toRef.directory() == addon_ref.node())) {
+ 								LoadEncoderMenu();
+ 							} else {
+ 								LoadCDMenu();
+@@ -467,8 +465,9 @@
+ 						}
+ 						break;
+ 					case B_DEVICE_MOUNTED: {
+-							dev_t dev;
+-							message->FindInt32("new device", &dev);
++							uint64 mountedDevice = 0;
++							message->FindUInt64("new device", &mountedDevice);
++							dev_t dev = (dev_t)mountedDevice;
+ 							BVolume vol(dev);
+ 							BDirectory root;
+ 							vol.GetRootDirectory(&root);
+@@ -479,10 +478,10 @@
+ 						LoadCDMenu();
+ 						break;
+ 					case B_DEVICE_UNMOUNTED: {
+-							dev_t dev;
+-							message->FindInt32("device", &dev);
++							uint64 unmountedDevice = 0;
++							message->FindUInt64("device", &unmountedDevice);
+ 							BMessage msg(REMOVE_MSG);
+-							msg.AddInt32("device", dev);
++							msg.AddInt64("device", (int64)unmountedDevice);
+ 							viewMessenger->SendMessage(&msg);
+ 						}
+ 						LoadCDMenu();

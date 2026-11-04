@@ -1,0 +1,21 @@
+Description: include the byte-order helper by its bare kit name
+ FFont.cpp used the full-path form <os/support/ByteOrder.h>. V\OS's
+ default include path covers every kit directory, and the bare name is
+ what the port rules mandate; the full-path form also tripped the
+ build-tree wrapper headers/build/os/support/ByteOrder.h:1, which
+ re-included itself through build/config_headers (first -I) until the
+ include-depth limit.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/FontBoy
+--- a/src/alien/FFont/FFont.cpp
++++ b/src/alien/FFont/FFont.cpp
+@@ -20,7 +20,7 @@
+ #endif
+ 
+ #ifndef _BYTEORDER_H
+-#include <os/support/ByteOrder.h>
++#include <ByteOrder.h>
+ #endif
+ 
+ #include <netinet/in.h>

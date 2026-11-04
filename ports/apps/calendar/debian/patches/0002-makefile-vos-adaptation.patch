@@ -1,0 +1,60 @@
+Description: adapt the Makefile-Engine makefile to the V\OS build
+ APP_MIME_SIG is aligned with the app_signature resource embedded by
+ calendar.rdef: the package never runs mimeset at build time, so the
+ resource signature (lowercase) is what the running app reports and the
+ compiled catalogs have to be keyed on it. SYSTEM_INCLUDE_PATHS drops
+ the findpaths invocations (findpaths ships only with the platform SDK,
+ not with the packaging toolchain) for the literal header directories
+ present on disk: private/netservices (the legacy UrlProtocol/Http
+ request API this app uses) and os/net (legacy NetKit, reached from the
+ app's NetworkKit include) are both absent from /etc/vos.specs, and
+ private/interface, private/shared and private/support complete the set
+ the findpaths calls asked for. LIBS keeps the shared and localestub
+ archives (the platform ships them as .a, not .so), drops libnetapi,
+ libnetwork and libnetservices - their code is merged privately into
+ libbe and no separate link library exists - replaces sqlite3 with the
+ static Debian archive plus libm behind it (the platform has no sqlite3
+ library at all, so a dynamic link would leave an unresolvable NEEDED
+ entry), and leaves everything else as upstream had it.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: https://github.com/haikuports/haikuports, haiku-apps/calendar/patches/calendar-0.1.patchset
+
+diff --git a/Makefile b/Makefile
+index 385162b..22377a1 100644
+--- a/Makefile
++++ b/Makefile
+@@ -15,7 +15,7 @@ NAME = Calendar
+ TYPE = APP
+ 
+ # 	If you plan to use localization, specify the application's MIME signature.
+-APP_MIME_SIG = application/x-vnd.Calendar
++APP_MIME_SIG = application/x-vnd.calendar
+ 
+ #	The following lines tell Pe and Eddie where the SRCS, RDEFS, and RSRCS are
+ #	so that Pe and Eddie can fill them in for you.
+@@ -89,7 +89,7 @@ RSRCS = \
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be tracker shared localestub sqlite3 bnetapi network netservices $(STDCPPLIBS)
++LIBS = be tracker shared localestub /usr/lib/x86_64-linux-gnu/libsqlite3.a m $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative
+@@ -102,10 +102,11 @@ LIBPATHS =
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+ SYSTEM_INCLUDE_PATHS = \
+-	$(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY private/interface) \
+-	$(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY private/netservices) \
+-	$(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY private/shared) \
+-	$(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY private/support)
++	/system/develop/headers/private/interface \
++	/system/develop/headers/private/netservices \
++	/system/develop/headers/os/net \
++	/system/develop/headers/private/shared \
++	/system/develop/headers/private/support
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are

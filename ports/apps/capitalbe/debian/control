@@ -1,0 +1,17 @@
+Source: capitalbe
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libsqlite3-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/CapitalBe
+
+Package: capitalbe
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: double-entry personal finance manager for V\OS
+ CapitalBe tracks money across accounts, payees, categories and scheduled
+ transactions in account registers, with budgets, reconciliation, QIF
+ import/export, multi-currency support and reports (net worth, cash flow,
+ transaction and budget reports).

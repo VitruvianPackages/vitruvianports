@@ -1,0 +1,11 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=BDirectConnect
+GenericName=Direct Connect client
+Comment=Chat on Direct Connect hubs
+Exec=/system/apps/BDirectConnect
+Icon=BDirectConnect
+Terminal=false
+StartupNotify=true
+Categories=Network;InstantMessaging;

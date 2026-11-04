@@ -1,0 +1,87 @@
+Description: Store the settings under the user settings directory
+ The add-on read and wrote its preferences from the legacy home
+ layout directly. Ask find_directory(B_USER_SETTINGS_DIRECTORY) for the
+ location instead, the same way ReName already does, so the
+ preferences window can save and the add-on can read its settings on
+ V\OS. Each function that touches the file gets its own local BPath.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- a/src/Shredder-S/PAppWindow.cpp
++++ b/src/Shredder-S/PAppWindow.cpp
+@@ -8,6 +8,7 @@
+ #include <Entry.h>
+ #include <stdlib.h>
+ #include <Path.h>
++#include <FindDirectory.h>
+ #include <File.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -55,7 +56,10 @@
+ 	BString temp;
+ 	BString temp2;
+ 
+-	if (file.SetTo("/boot/home/config/settings/Shredder.conf", B_READ_WRITE) == B_OK) {
++	BPath confPath;
++	find_directory(B_USER_SETTINGS_DIRECTORY, &confPath);
++	confPath.Append("Shredder.conf");
++	if (file.SetTo(confPath.Path(), B_READ_WRITE) == B_OK) {
+ 		char * iterations;	
+ 		off_t length;
+ 		file.GetSize(&length);		// Get the file length;
+@@ -93,7 +97,10 @@
+ 		BString tempString;
+ 		BFile	file;
+ 
+-		if (file.SetTo("/boot/home/config/settings/Shredder.conf", B_READ_WRITE | B_CREATE_FILE) == B_OK) {
++		BPath confPath;
++		find_directory(B_USER_SETTINGS_DIRECTORY, &confPath);
++		confPath.Append("Shredder.conf");
++		if (file.SetTo(confPath.Path(), B_READ_WRITE | B_CREATE_FILE) == B_OK) {
+ 			if (slider->Value() < 10)
+ 				tempString << "0" << slider->Value();
+ 			else
+--- a/src/Shredder-S/PStatWindow.cpp
++++ b/src/Shredder-S/PStatWindow.cpp
+@@ -6,6 +6,7 @@
+ #include <Roster.h>
+ #include <Entry.h>
+ #include <Path.h>
++#include <FindDirectory.h>
+ #include <File.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+@@ -41,7 +42,10 @@
+ 	}
+ 
+ 	// Get the config
+-	if (file.SetTo("/boot/home/config/settings/Shredder.conf", B_READ_ONLY) == B_OK) {
++	BPath confPath;
++	find_directory(B_USER_SETTINGS_DIRECTORY, &confPath);
++	confPath.Append("Shredder.conf");
++	if (file.SetTo(confPath.Path(), B_READ_ONLY) == B_OK) {
+ 		off_t length;
+ 		file.GetSize(&length);		// Get the file length;
+ 		iterations = (char *) malloc(length);
+--- a/src/Shredder-S/ShredderAppAddon.cpp
++++ b/src/Shredder-S/ShredderAppAddon.cpp
+@@ -8,6 +8,7 @@
+ #include <Entry.h>
+ #include <stdlib.h>
+ #include <Path.h>
++#include <FindDirectory.h>
+ #include <File.h>
+ #include <fstream>
+ #include <StorageKit.h>
+@@ -38,7 +39,10 @@
+ 
+ 
+ 	// Get the config
+-	if (file.SetTo("/boot/home/config/settings/Shredder.conf", B_READ_ONLY) == B_OK) {
++	BPath confPath;
++	find_directory(B_USER_SETTINGS_DIRECTORY, &confPath);
++	confPath.Append("Shredder.conf");
++	if (file.SetTo(confPath.Path(), B_READ_ONLY) == B_OK) {
+ 		off_t length;
+ 		file.GetSize(&length);		// Get the file length;
+ 		iterations = (char *) malloc(length);

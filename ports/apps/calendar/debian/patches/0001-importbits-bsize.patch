@@ -1,0 +1,22 @@
+Description: build with the current BBitmap::ImportBits overload
+ The vector-icon loader calls ImportBits with two int32 sizes; the
+ public overload in the shipped legacy headers takes a BSize, the int32
+ pair is private. Same change as the legacy ports patchset for this
+ recipe.
+Author: =?UTF-8?q?M=C3=A1ximo=20Casta=C3=B1eda?= <antiswen@yahoo.es>
+Forwarded: not-needed
+Origin: https://github.com/haikuports/haikuports, haiku-apps/calendar/patches/calendar-0.1.patchset
+
+diff --git a/src/utils/ResourceLoader.cpp b/src/utils/ResourceLoader.cpp
+index 1fa2741..82992d4 100644
+--- a/src/utils/ResourceLoader.cpp
++++ b/src/utils/ResourceLoader.cpp
+@@ -27,7 +27,7 @@ BBitmap* LoadVectorIcon(const char* name, int32 iconSize, int32 cropSize)
+ 		&& BIconUtils::GetVectorIcon((uint8*)data, length, temp)
+ 			== B_OK
+ 		&& dest->ImportBits(temp, BPoint(0, 0), BPoint(0, 0),
+-			cropSize, cropSize) == B_OK)  {
++			BSize(cropSize, cropSize)) == B_OK)  {
+ 			delete temp;
+ 			return dest;
+ 	}

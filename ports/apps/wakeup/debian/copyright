@@ -1,0 +1,21 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: WakeUp
+Source: https://github.com/HaikuArchives/WakeUp
+
+Files: *
+Copyright: 2013-2025 Jonathan Villemure
+License: WakeUp-README
+Comment: ReadMe.md carries the only licence statement, in these words
+ (reproduced verbatim below); there is no separate licence file.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: WakeUp-README
+Comment: packaging follows the licence of the packaged program.
+
+License: WakeUp-README
+ You are free to re-use, modify or do whatever you want with this code.
+ However, if the algorithm is used in one of your applications, the
+ author (Jonathan Villemure) wants credit.
+ .
+ (This is the upstream ReadMe.md licence text, kept verbatim.)

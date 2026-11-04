@@ -1,0 +1,3 @@
+dist/InitialSettings system/data/Vision/
+vision.png usr/share/pixmaps/
+debian/vision.desktop usr/share/applications/

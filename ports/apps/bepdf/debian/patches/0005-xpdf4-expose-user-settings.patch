@@ -1,0 +1,22 @@
+Description: expose the user-modifiable settings to the viewer
+ The viewer enumerates the CID-to-Unicode collection table from a
+ helper copied out of the pre-4 engine, where the user-modifiable
+ settings block was reachable; the bundled 4.0 header places it after
+ a private: label, so the viewer does not compile. Mark that block
+ public, matching the pre-4 layout.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/BePDF
+
+diff --git a/xpdf/xpdf/GlobalParams.h b/xpdf/xpdf/GlobalParams.h
+index 3efef16..0e35881 100644
+--- a/xpdf/xpdf/GlobalParams.h
++++ b/xpdf/xpdf/GlobalParams.h
+@@ -426,6 +426,7 @@ private:
+   NameToCharCode *		// mapping from char name to
+     macRomanReverseMap;		//   MacRomanEncoding index
+ 
++public:
+   //----- user-modifiable settings
+ 
+   GString *baseDir;		// base directory - for plugins, etc.

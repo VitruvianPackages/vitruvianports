@@ -1,0 +1,226 @@
+Description: Station: probe the audio header off the probe bytes
+ The probe used to hand the fetched bytes to the legacy media extractor
+ to learn the stream's format. media2's BMediaFile opens an entry_ref or
+ a BUrl only, so ProbeBuffer parses the MPEG audio (Layer III) or ADTS
+ frame header of the probe bytes itself and fills sample rate, channels,
+ bitrate, encoding and frame size from it -- a header read, not a
+ decoder. The probe window grows from 4 KiB to 64 KiB so an ID3v2 tag
+ does not hide the first frame; stations whose format stays unknown rely
+ on the Ice-Audio-Info response header, as they already did.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-21
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+---
+--- a/source/Station.cpp
++++ b/source/Station.cpp
+@@ -34,8 +34,6 @@
+ #include <FindDirectory.h>
+ #include <HttpRequest.h>
+ #include <HttpResult.h>
+-#include <MediaFile.h>
+-#include <MediaTrack.h>
+ #include <Message.h>
+ #include <Mime.h>
+ #include <NodeInfo.h>
+@@ -45,6 +43,7 @@
+ #include <TranslatorRoster.h>
+ #include <UrlSynchronousRequest.h>
+ #include <fs_attr.h>
++#include <media2/MediaDefs.h>
+ 
+ #include "Debug.h"
+ #include "HttpUtils.h"
+@@ -273,7 +272,7 @@
+ 	// IP's should be small, anyway.
+ 
+ 	// if (fStreamUrl.Protocol() == "https") {
+-	buffer = HttpUtils::GetAll(&fStreamUrl, &headers, 2 * 1000 * 1000, &contentType, 4096);
++	buffer = HttpUtils::GetAll(&fStreamUrl, &headers, 2 * 1000 * 1000, &contentType, 64 * 1024);
+ 	/*
+ 	} else {
+ 		BUrl resolvedUrl;
+@@ -354,36 +353,158 @@
+ }
+ 
+ 
+-status_t
+-Station::ProbeBuffer(BPositionIO* buffer)
++// Format sniffing for the probe bytes. media2's byte-stream extractor is
++// gone with the legacy media kit (its BMediaFile opens an entry_ref or a
++// BUrl only), so the audio header itself is read here: enough to fill the
++// station's format fields, not a decoder.
++struct ProbeFormat {
++	int32 sampleRate;
++	int32 channels;
++	int32 bitRate;
++	int32 encoding;
++	size_t frameSize;
++};
++
++
++static const int32 kMpegSampleRates[4][3] = {
++	{ 11025, 12000, 8000 },		// MPEG 2.5
++	{ 0, 0, 0 },				// reserved
++	{ 22050, 24000, 16000 },	// MPEG 2
++	{ 44100, 48000, 32000 }		// MPEG 1
++};
++
++
++static const int32 kLayer3Bitrates[2][15] = {
++	// Index 0 is "free format", 15 is invalid; both stay 0.
++	{ 0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320 },
++	{ 0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160 }
++};
++
++
++static const int32 kAdtsSampleRates[13] = { 96000, 88200, 64000, 48000, 44100, 32000,
++	24000, 22050, 16000, 12000, 11025, 8000, 7350 };
++
++
++static const int32 kAdtsChannels[8] = { 0, 1, 2, 3, 4, 5, 6, 8 };
++
++
++static status_t
++_ParseMpegAudioFrame(const unsigned char* frame, ProbeFormat* out)
+ {
+-	status_t status = B_OK;
+-	BMediaFile mediaFile(buffer);
++	uint32 version = (frame[1] >> 3) & 0x3;
++	uint32 layer = (frame[1] >> 1) & 0x3;
++	uint32 bitrateIndex = (frame[2] >> 4) & 0xf;
++	uint32 rateIndex = (frame[2] >> 2) & 0x3;
++
++	// Only Layer III is carried by radio streams; other layers fall back
++	// to the response-header fields.
++	if (version == 1 || layer != 1 || bitrateIndex == 0 || bitrateIndex == 15
++		|| rateIndex == 3)
++		return B_NOT_SUPPORTED;
++
++	int32 sampleRate = kMpegSampleRates[version][rateIndex];
++	int32 bitRate = kLayer3Bitrates[version == 3 ? 0 : 1][bitrateIndex] * 1000;
++
++	out->sampleRate = sampleRate;
++	out->channels = ((frame[3] >> 6) & 0x3) == 3 ? 1 : 2;
++	out->bitRate = bitRate;
++	out->encoding = B_CODEC_TYPE_MP3;
++	out->frameSize = ((version == 3 ? 144 : 72) * (size_t)bitRate) / (size_t)sampleRate;
+ 
+-	status = mediaFile.InitCheck();
+-	if (status != B_OK)
+-		return status;
++	return B_OK;
++}
+ 
+-	if (mediaFile.CountTracks() < 1)
+-		return B_ERROR;
+ 
+-	BMediaTrack* mediaTrack = mediaFile.TrackAt(0);
++static status_t
++_ParseAdtsFrame(const unsigned char* frame, ProbeFormat* out)
++{
++	uint32 rateIndex = (frame[2] >> 2) & 0xf;
++	uint32 channelConfig = ((frame[2] & 0x1) << 2) | ((frame[3] >> 6) & 0x3);
++	uint32 frameLength = ((frame[3] & 0x3) << 11) | ((uint32)frame[4] << 3)
++		| ((frame[5] >> 5) & 0x7);
++
++	if (rateIndex >= 13 || channelConfig > 7 || frameLength < 7)
++		return B_NOT_SUPPORTED;
++
++	int32 sampleRate = kAdtsSampleRates[rateIndex];
++
++	out->sampleRate = sampleRate;
++	out->channels = kAdtsChannels[channelConfig] != 0 ? kAdtsChannels[channelConfig] : 2;
++	out->bitRate = (int32)(((uint64)frameLength * 8 * (uint64)sampleRate) / 1024);
++	out->encoding = B_CODEC_TYPE_AAC;
++	out->frameSize = frameLength;
+ 
+-	media_format encodedFormat;
+-	media_format decodedFormat;
++	return B_OK;
++}
+ 
+-	status = mediaTrack->EncodedFormat(&encodedFormat);
+-	if (status != B_OK)
+-		return status;
+ 
+-	fSampleRate = int32(encodedFormat.u.encoded_audio.output.frame_rate);
+-	fChannels = encodedFormat.u.encoded_audio.output.channel_count;
+-	fBitRate = int32(encodedFormat.u.encoded_audio.bit_rate);
+-	fEncoding = encodedFormat.u.encoded_audio.encoding;
+-	fFrameSize = encodedFormat.u.encoded_audio.frame_size;
++static status_t
++_ProbeAudioFormat(const char* data, size_t size, ProbeFormat* out)
++{
++	const unsigned char* bytes = (const unsigned char*)data;
+ 
+-	status = mediaTrack->DecodedFormat(&decodedFormat);
+-	CheckFlags();
++	size_t offset = 0;
++	if (size >= 10 && memcmp(bytes, "ID3", 3) == 0) {
++		size_t tagSize = 10 + (((size_t)(bytes[6] & 0x7f) << 21)
++			| ((size_t)(bytes[7] & 0x7f) << 14)
++			| ((size_t)(bytes[8] & 0x7f) << 7) | (size_t)(bytes[9] & 0x7f));
++		offset = tagSize;
++	}
++	if (offset + 4 > size)
++		return B_NOT_SUPPORTED;
++
++	for (; offset + 6 <= size; offset++) {
++		if (bytes[offset] != 0xff)
++			continue;
++
++		if ((bytes[offset + 1] & 0xf6) == 0xf0) {	// ADTS sync
++			if (_ParseAdtsFrame(bytes + offset, out) == B_OK)
++				return B_OK;
++		} else if ((bytes[offset + 1] & 0xe0) == 0xe0
++			&& (bytes[offset + 1] & 0x18) != 0x08
++			&& (bytes[offset + 1] & 0x06) != 0x00) {	// MPEG audio sync
++			if (_ParseMpegAudioFrame(bytes + offset, out) == B_OK)
++				return B_OK;
++		}
++	}
++
++	return B_NOT_SUPPORTED;
++}
++
++
++status_t
++Station::ProbeBuffer(BPositionIO* buffer)
++{
++	if (buffer == NULL)
++		return B_BAD_VALUE;
++
++	off_t end = buffer->Seek(0, SEEK_END);
++	buffer->Seek(0, SEEK_SET);
++	if (end <= 0)
++		return B_ERROR;
++	if (end > 64 * 1024)
++		end = 64 * 1024;
++
++	char* probe = (char*)malloc((size_t)end);
++	if (probe == NULL)
++		return B_NO_MEMORY;
++
++	status_t status = B_NOT_SUPPORTED;
++	ssize_t got = buffer->ReadAt(0, probe, (size_t)end);
++	if (got >= 4) {
++		ProbeFormat format;
++		if (_ProbeAudioFormat(probe, (size_t)got, &format) == B_OK) {
++			fSampleRate = format.sampleRate;
++			fChannels = format.channels;
++			fBitRate = format.bitRate;
++			fEncoding = format.encoding;
++			fFrameSize = format.frameSize;
++
++			CheckFlags();
++			status = B_OK;
++		}
++	}
++	free(probe);
+ 
+ 	return status;
+ }

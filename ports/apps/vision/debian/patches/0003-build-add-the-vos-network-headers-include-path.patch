@@ -1,0 +1,23 @@
+Description: build: add the VOS network header directory to the
+ include path
+ ServerAgent.cpp includes <SecureSocket.h> and <Socket.h>; those
+ headers live in the develop os/net directory, which the packaged
+ specs file does not put on the include path, so both includes fail.
+ The Makefile already lists header directories through
+ SYSTEM_INCLUDE_PATHS.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: own
+
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -120,7 +120,8 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = /system/develop/headers/private/interface/
++SYSTEM_INCLUDE_PATHS = /system/develop/headers/private/interface/ \
++	/system/develop/headers/os/net/
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are

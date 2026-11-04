@@ -1,0 +1,14 @@
+Source: beohms
+Section: electronics
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BeOhms
+
+Package: beohms
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Ohm's law calculator
+ BeOhms calculates voltage, current and resistance with Ohm's law.

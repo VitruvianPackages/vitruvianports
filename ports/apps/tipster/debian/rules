@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine
+
+# The app looks for tip collections in the system data directory.
+override_dh_auto_install:
+	dh_auto_install --
+	install -d debian/tipster/system/data/Tipster
+	install -m 0644 tips/*.txt debian/tipster/system/data/Tipster/

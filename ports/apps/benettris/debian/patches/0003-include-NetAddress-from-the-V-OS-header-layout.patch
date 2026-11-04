@@ -1,0 +1,25 @@
+Description: include NetAddress from the V\OS header layout
+ The packaged include path adds the os/ tree but not its net/ subdirectory
+ (vos.specs has no -I for os/net), so the legacy top-level <NetAddress.h>
+ include does not resolve. V\OS ships the header at net/NetAddress.h;
+ the app only pulls it in and never names BNetAddress, so this is a path
+ fix and nothing else.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-21
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+---
+--- a/Application/BeTrisApp.h
++++ b/Application/BeTrisApp.h
+@@ -11,7 +11,7 @@
+ #include <Application.h>
+ #include <List.h>
+ #include <String.h>
+-#include <NetAddress.h>
++#include <net/NetAddress.h>
+ #include <Path.h>
+ #include <Resources.h>
+ 

@@ -1,0 +1,15 @@
+Source: wakeup
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/WakeUp
+
+Package: wakeup
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: countdown alarm clock for V\OS
+ WakeUp is a small countdown timer that buzzes when it reaches zero:
+ set hours/minutes/seconds, start or reset, with a large digit display.

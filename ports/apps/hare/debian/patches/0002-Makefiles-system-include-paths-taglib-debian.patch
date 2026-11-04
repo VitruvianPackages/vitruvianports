@@ -1,0 +1,90 @@
+Description: point SYSTEM_INCLUDE_PATHS at the Debian taglib headers
+ Upstream asks findpaths for the taglib and private/interface header
+ directories; findpaths does not exist in Debian build environments, so the
+ expression expands to nothing and the bare taglib includes (<tag.h>,
+ <fileref.h>, <mpegfile.h>) fail. libtag1-dev installs them under
+ /usr/include/taglib, which is what this replaces in all seven Makefiles.
+ The private/interface directory that Makefile_Hare asked for is already in
+ /etc/vos.specs, so nothing is lost there; V\OS ships no taglib include dir
+ in the specs at all (findpaths was the only route upstream had).
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- a/Makefile_libHare
++++ b/Makefile_libHare
+@@ -72,7 +72,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY taglib)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are
+--- a/src/Encoders/BeEncoder/Makefile
++++ b/src/Encoders/BeEncoder/Makefile
+@@ -69,7 +69,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY taglib)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are
+--- a/src/Encoders/M3UCreator/Makefile
++++ b/src/Encoders/M3UCreator/Makefile
+@@ -68,7 +68,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY taglib)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are
+--- a/src/Encoders/MP3GoGo/Makefile
++++ b/src/Encoders/MP3GoGo/Makefile
+@@ -68,7 +68,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY taglib)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are
+--- a/src/Encoders/MP3Lame/Makefile
++++ b/src/Encoders/MP3Lame/Makefile
+@@ -68,7 +68,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY taglib)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are
+--- a/src/Encoders/OGGEncoder/Makefile
++++ b/src/Encoders/OGGEncoder/Makefile
+@@ -68,7 +68,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY taglib)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are
+--- a/Makefile_Hare
++++ b/Makefile_Hare
+@@ -74,7 +74,7 @@
+ #	Additional paths to look for system headers. These use the form
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+-SYSTEM_INCLUDE_PATHS = $(shell findpaths -e B_FIND_PATH_HEADERS_DIRECTORY private/interface)
++SYSTEM_INCLUDE_PATHS = /usr/include/taglib
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are

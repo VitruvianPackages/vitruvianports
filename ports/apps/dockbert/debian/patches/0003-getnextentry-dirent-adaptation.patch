@@ -1,0 +1,100 @@
+--- a/source/TrackerMenus.cpp
++++ b/source/TrackerMenus.cpp
+@@ -478,34 +478,26 @@
+ 		}
+ 	}
+ 
+-	char buf[4096];
+-	dirent *dent;
+-	int count;
+-	while((count = bdir.GetNextDirents((dirent*)buf, 4096)) > 0)
++	// VOS dirents have no d_pdev/d_pino pseudo-device fields; walk the
++	// directory with GetNextEntry and build the refs through the API.
++	BEntry dentEntry;
++	while (bdir.GetNextEntry(&dentEntry) == B_OK)
+ 	{
+-		dent = (dirent*)buf;
+-		while (count --)
++		dentEntry.GetRef(&eref);
++		if (strcmp(eref.name, ".") != 0 && strcmp(eref.name, "..") != 0)
+ 		{
+-			if (strcmp(dent->d_name, ".") != 0  && strcmp(dent->d_name, "..") !=0)
+-			{
+-				eref.device = dent->d_pdev;
+-				eref.directory = dent->d_pino;
+-				eref.set_name(dent->d_name);
+-
+-				BPath path(&eref);
+-				BEntry entry(&eref, true);
+-				BBitmap *bitmap = new BBitmap(GetTrackerIcon(&entry, B_MINI_ICON));
++			BPath path(&eref);
++			BEntry entry(&eref, true);
++			BBitmap *bitmap = new BBitmap(GetTrackerIcon(&entry, B_MINI_ICON));
+ 
+-				if (entry.IsDirectory())
+-				{
+-					BNavMenu *submenu = new BNavMenu(path.Leaf(), B_REFS_RECEIVED, BMessenger(kTrackerSignature));
+-					submenu->SetNavDir(&eref);
+-					itemlist.AddItem(new TTrackerMenuItem(submenu, bitmap, eref ));
+-				}
+-				else
+-					itemlist.AddItem(new TTrackerMenuItem(path.Leaf(), bitmap, eref));
++			if (entry.IsDirectory())
++			{
++				BNavMenu *submenu = new BNavMenu(path.Leaf(), B_REFS_RECEIVED, BMessenger(kTrackerSignature));
++				submenu->SetNavDir(&eref);
++				itemlist.AddItem(new TTrackerMenuItem(submenu, bitmap, eref ));
+ 			}
+-			dent = (dirent *)((char *)dent + dent->d_reclen);
++			else
++				itemlist.AddItem(new TTrackerMenuItem(path.Leaf(), bitmap, eref));
+ 		}
+ 	}
+ 
+--- a/source/InnerPanelIcons.cpp
++++ b/source/InnerPanelIcons.cpp
+@@ -1457,30 +1460,23 @@
+ 			get_ref_for_path(path.Path(), &ref);
+ 			BDirectory bdir( &ref );
+ 
+-			char buf[4096];
+-			dirent *dent;
+-			int count;
+ 			int thiscount = 0;
+-			while( ( count = bdir.GetNextDirents( (dirent*)buf, 4096)) > 0 )
++			// VOS dirents have no d_pdev/d_pino pseudo-device fields;
++			// walk the directory with GetNextEntry and build the refs
++			// through the API instead.
++			BEntry dentEntry;
++			while ( bdir.GetNextEntry( &dentEntry ) == B_OK )
+ 			{
+-				dent = (dirent*)buf;
+-				while ( count -- )
++				entry_ref eref;
++				dentEntry.GetRef( &eref );
++				if (strcmp( eref.name, "." ) != 0 && strcmp( eref.name, ".." ) != 0)
+ 				{
+-					if (strcmp( dent->d_name, "." ) != 0 && strcmp( dent->d_name, ".." ) != 0)
+-					{
+-						entry_ref eref;
+-						eref.device = dent->d_pdev;
+-						eref.directory = dent->d_pino;
+-						eref.set_name( dent->d_name );
+-
+-						BPath path( &eref );
+-						BEntry e(&eref, true);
+-						BBitmap *bitmap = new BBitmap( GetTrackerIcon(&e, B_MINI_ICON) );
+-						menu->AddItem( new TTrackerMenuItem( path.Leaf(), bitmap, eref ) );
+-						entrycount ++;
+-						thiscount ++;
+-					}
+-					dent = (dirent *)((char *)dent + dent->d_reclen);
++					BPath path( &eref );
++					BEntry e(&eref, true);
++					BBitmap *bitmap = new BBitmap( GetTrackerIcon(&e, B_MINI_ICON) );
++					menu->AddItem( new TTrackerMenuItem( path.Leaf(), bitmap, eref ) );
++					entrycount ++;
++					thiscount ++;
+ 				}
+ 			}
+ 

@@ -1,0 +1,19 @@
+Description: drop the standalone columnlistview library from the link
+ The makefile linked -lcolumnlistview; V\OS ships the ColumnListView
+ widget inside libbe (115 exported symbols, no separate library file),
+ so the link failed with "cannot find -lcolumnlistview". The library
+ entry is removed; the kit symbols still resolve through -lbe.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Slayer
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -78,7 +78,7 @@
+ #		naming scheme you need to specify the path to the library
+ #		and it's name
+ #		library: my_lib.a entry: my_lib.a or path/my_lib.a
+-LIBS= $(STDCPPLIBS) be columnlistview localestub shared translation
++LIBS= $(STDCPPLIBS) be localestub shared translation
+ 
+ #	specify additional paths to directories following the standard
+ #	libXXX.so or libXXX.a naming scheme.  You can specify full paths

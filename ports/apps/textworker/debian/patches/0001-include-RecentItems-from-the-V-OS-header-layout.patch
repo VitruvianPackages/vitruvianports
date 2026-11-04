@@ -1,0 +1,27 @@
+Description: MainWindow: include RecentItems from V\OS's path (temporary)
+ Temporary patch: upstream's bare #include <RecentItems.h> is correct, but
+ V\OS does not make it resolve. Verified in this container: the header
+ exists only at /system/develop/headers/os/be_apps/Tracker/RecentItems.h,
+ /etc/vos.specs lists no -I for that directory (it does list -I for
+ headers/os and for private/shared), and private/shared carries no copy of
+ the file. VOS-BUGS: headers/os/be_apps/Tracker/RecentItems.h is not
+ reachable as <RecentItems.h> -- one-line fix: also install a forwarding
+ header at headers/private/shared/RecentItems.h, or add
+ -I/system/develop/headers/os/be_apps/Tracker to /etc/vos.specs. Drop this
+ patch when either lands.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/MainWindow.cpp
++++ b/MainWindow.cpp
+@@ -17,6 +17,6 @@
+ #include <NodeInfo.h>
+ #include <Path.h>
+-#include <RecentItems.h>
++#include <os/be_apps/Tracker/RecentItems.h>
+ #include <Resources.h>
+ #include <Screen.h>
+ #include <ScrollView.h>

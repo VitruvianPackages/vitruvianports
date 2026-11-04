@@ -1,0 +1,13 @@
+Description: leave MIME types to the attributes trigger
+Forwarded: not-needed
+---
+--- a/Makefile
++++ b/Makefile
+@@ -11,7 +11,6 @@
+ 	$(CC) $(CFLAGS) -o DeskbarEyes $^ $(LIBS)
+ 	rc Resource.rdef
+ 	xres -o DeskbarEyes Resource.rsrc
+-	mimeset -f DeskbarEyes
+ 
+ .cpp.o:
+ 	$(CC) $(CFLAGS) -c $^

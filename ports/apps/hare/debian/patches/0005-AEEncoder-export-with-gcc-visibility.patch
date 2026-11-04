@@ -1,0 +1,30 @@
+Description: export load_encoder with GCC visibility, not __declspec
+ AEEncoder.h defined __FSS_EXPORT as __declspec(dllexport/dllimport),
+ which GCC rejects outright ("expected constructor, destructor, or type
+ conversion before '(' token"), so nothing in the library or the add-ons
+ compiles. The macro only exists to mark load_encoder as the add-ons'
+ exported entry point, which on GCC means default visibility; the app
+ resolves it with get_image_symbol() after dlopen(), so dllimport never
+ applied to it anyway.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- a/src/libHare/AEEncoder.h
++++ b/src/libHare/AEEncoder.h
+@@ -11,11 +11,10 @@
+ #include <String.h>
+ #include <Volume.h>
+ 
+-#ifdef __FSS_BUILD
+-#define __FSS_EXPORT __declspec(dllexport)
+-#else
+-#define __FSS_EXPORT __declspec(dllimport)
+-#endif
++// The legacy __declspec(dllexport/dllimport) pair does not exist on GCC.
++// load_encoder is resolved with get_image_symbol() after dlopen(), so
++// default visibility is all the add-ons and the application need.
++#define __FSS_EXPORT __attribute__((visibility("default")))
+ 
+ #define FSS_ENCODE 'enc'
+ #define FSS_SETMAX_STATUS_BAR 'max'

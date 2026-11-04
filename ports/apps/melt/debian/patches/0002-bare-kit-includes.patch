@@ -1,0 +1,28 @@
+Description: include the kit headers by their bare names
+ StyleUtils.cpp used the full legacy paths <be/app/Application.h>,
+ <be/app/Roster.h>, <be/interface/Bitmap.h>, <be/storage/File.h> and
+ <be/storage/Resources.h>. V\OS's default include path covers every kit
+ directory, and the bare name is what the port rules mandate; the be/
+ prefixed form does not exist on V\OS.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Melt
+--- a/StyleUtils.cpp
++++ b/StyleUtils.cpp
+@@ -8,11 +8,11 @@
+    Superior software for a superior OS
+ */
+ 
+-#include <be/app/Application.h>
+-#include <be/app/Roster.h>
+-#include <be/interface/Bitmap.h>
+-#include <be/storage/File.h>
+-#include <be/storage/Resources.h>
++#include <Application.h>
++#include <Roster.h>
++#include <Bitmap.h>
++#include <File.h>
++#include <Resources.h>
+ #include <string.h>
+ 
+ BBitmap *FetchStyleResource(const char *rcName)

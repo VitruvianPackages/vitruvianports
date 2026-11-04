@@ -1,0 +1,92 @@
+Description: post-build debug: launch gdb in the system terminal
+ The legacy GUI debugger and the old tool paths it probed are not part of
+ this system. The debug action now runs gdb inside the system terminal
+ when both are installed, and otherwise reports that debugging is
+ disabled instead of walking dead paths.
+Author: VitruvianOS Ports <ports@vitruvian.invalid>
+Forwarded: no
+Origin: upstream https://github.com/HaikuArchives/Paladin @ 5b7c442bd68eb3e04ce2b5b780eb2314db3b977a
+
+--- a/Paladin/BuildSystem/ProjectBuilder.cpp
++++ b/Paladin/BuildSystem/ProjectBuilder.cpp
+@@ -244,7 +244,7 @@
+ 	std::string jsonFile(fProject->GetBuildInfo()->projectFolder.GetFullPath());
+ 	jsonFile += std::string("/compile_commands.json");
+ 	STRACE(1,("Writing out compile commands\n"));
+-	STRACE(1,(jsonFile.c_str()));
++	STRACE(1,("%s", jsonFile.c_str()));
+ 	STRACE(1,("\n"));
+ 	std::ofstream ofs(jsonFile.c_str(), std::ofstream::out);
+ 	CompileCommandWriter::ToJSONFile(ofs,fCommands);
+@@ -301,51 +301,31 @@
+ 		}
+ 		case POSTBUILD_DEBUG:
+ 		{
+-			BEntry haikuDebugger("/boot/system/apps/Debugger");
+-			if (haikuDebugger.Exists()) 
++			// V\OS: the legacy GUI debugger is not part of the system and
++			// the old tool paths do not exist here.  Launch gdb inside the
++			// system terminal when both are present; otherwise disable the
++			// action with an explanation instead of probing dead paths.
++			BString targetPath(fProject->GetPath().GetFolder());
++			targetPath << "/" << fProject->GetTargetName();
++
++			const char* gdbPath = "/usr/bin/gdb";
++			if (!BEntry(gdbPath).Exists())
++				gdbPath = "/bin/gdb";
++
++			if (BEntry(gdbPath).Exists()
++				&& BEntry("/system/apps/Terminal").Exists())
+ 			{
+-				entry_ref debuggerref;
+-				haikuDebugger.GetRef(&debuggerref);
+-				
+-				BString targetPath(fProject->GetPath().GetFolder());
+-				targetPath << "/" << fProject->GetTargetName();
+-				
+-				const char* argv[] = {targetPath.String()};
+-				be_roster->Launch(&debuggerref,1,argv);
+-			}
+-			else
+-			{
+-				// Can't check the Haiku version by using B_BEOS_VERSION, so
+-				// we have to depend on a small hack. R5 and Zeta don't have gdb,
+-				// so this shouldn't break unless someone changes this in Haiku
+-				if (BEntry("/boot/system/bin/gdb").Exists())
+-				{
+-					launcher.SetRef("/boot/system/apps/Terminal");
+-					launcher.AddArg("gdb");
+-				}
+-				else
+-				{
+-					if (BEntry("/boot/develop/tools/experimental/debugger/bdb").Exists())
+-						launcher.SetRef("/boot/develop/tools/experimental/debugger/bdb");
+-					else
+-					{
+-						// Stupid Zeta reorganization. Meh.
+-						if (BEntry("/boot/apps/Development/bdb/bdb").Exists())
+-							launcher.SetRef("/boot/apps/Development/bdb/bdb");
+-						else
+-						{
+-							ShowAlert(B_TRANSLATE("Paladin can't seem to find the debugger. Sorry."));
+-							break;
+-						}
+-					}
+-				}
+-			
+-				BString targetPath(fProject->GetPath().GetFolder());
+-				targetPath << "/" << fProject->GetTargetName();
++				launcher.SetRef("/system/apps/Terminal");
++				launcher.AddArg(gdbPath);
+ 				launcher.AddArg(targetPath.String());
+ 				launcher.ParseToArgs(fProject->GetRunArgs());
+ 				STRACE(1,("Debugger command: %s\n",launcher.AsString().String()));
+ 				launcher.Launch();
++			}
++			else
++			{
++				ShowAlert(B_TRANSLATE("Paladin can't find gdb, so debugging "
++					"is disabled."));
+ 				break;
+ 			}
+ 		}

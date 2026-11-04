@@ -1,0 +1,22 @@
+Description: build the rdef from source/, where the file ships
+ The Makefile points RDEFS at sources/armyknife.rdef while the release
+ ships source/armyknife.rdef, so make stops with "No rule to make target
+ 'sources/armyknife.rdef'" and the binary would come out without any
+ resources. Upstream master still carries the same typo.
+Author: Numerio <b.vitruvio@gmail.com>
+Origin: vendor
+Last-Update: 2026-10-23
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/Makefile
++++ b/Makefile
+@@ -60,7 +60,7 @@
+ 
+ #	Specify the resource definition files to use. Full or relative paths can be
+ #	used.
+-RDEFS = sources/armyknife.rdef
++RDEFS = source/armyknife.rdef
+ 
+ #	Specify the resource files to use. Full or relative paths can be used.
+ #	Both RDEFS and RSRCS can be utilized in the same Makefile.

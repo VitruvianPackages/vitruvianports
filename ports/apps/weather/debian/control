@@ -1,0 +1,17 @@
+Source: vos-weather
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Weather
+
+Package: vos-weather
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: weather forecast application for V\OS
+ Weather shows the forecast for cities you pick, fetched at runtime from
+ the Open-Meteo web API (geocoding and forecast endpoints, no API key
+ required). It includes a preferences window, a forecast view and a
+ Deskbar replicant.

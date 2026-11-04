@@ -1,0 +1,28 @@
+Description: entry_ref: read device and directory through accessors
+ This system's entry_ref exposes device and directory as accessor
+ functions instead of public fields, so the three field reads no longer
+ compile.
+Author: VitruvianOS Ports <ports@vitruvian.invalid>
+Forwarded: no
+Origin: upstream https://github.com/HaikuArchives/Paladin @ 5b7c442bd68eb3e04ce2b5b780eb2314db3b977a
+
+--- a/Paladin/FileUtils.cpp
++++ b/Paladin/FileUtils.cpp
+@@ -109,7 +109,7 @@
+ 		if (S_ISDIR(statData.st_mode))
+ 		{
+ 			entry_ref innerref = FindFile(ref,name);
+-			if (innerref.device != -1 && innerref.directory != -1)
++			if (innerref.device() != -1 && innerref.directory() != -1)
+ 				return innerref;
+ 		}
+ 	}
+@@ -149,7 +149,7 @@
+ 		if (S_ISDIR(statData.st_mode))
+ 		{
+ 			entry_ref innerref = FindFile(ref,name);
+-			if (innerref.device != -1 && innerref.directory != -1)
++			if (innerref.device() != -1 && innerref.directory() != -1)
+ 				return innerref;
+ 		}
+ 	}

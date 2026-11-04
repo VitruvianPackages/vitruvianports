@@ -1,0 +1,21 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Hustler
+Source: https://github.com/HaikuArchives/Hustler
+
+Files: *
+Copyright: Hustler author(s)
+License: public-domain
+Comment: the upstream Documentation.html carries this statement, in these
+ words (reproduced verbatim below).
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: public-domain
+Comment: packaging follows the licence of the packaged program.
+
+License: public-domain
+ Hustler is public domain, so you may do anything you like with it.
+ No warranties expressed or implied. I am not responsible for whatever may
+ happen to whomever, whenever.
+ .
+ (This is the upstream Documentation.html legal statement, kept verbatim.)

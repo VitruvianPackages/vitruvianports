@@ -1,0 +1,20 @@
+Description: Makefile: stop linking libcolumnlistview
+ V\OS compiles ColumnListView into libbe (src/kits/interface/
+ ColumnListView.cpp) and ships no libcolumnlistview, so -lcolumnlistview
+ ends the link with "cannot find -lcolumnlistview". Every other library in
+ LIBS (be, tracker, shared, localestub, translation, sqlite3) resolves
+ against vos/vos-dev.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -120,7 +120,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be tracker shared localestub translation sqlite3 columnlistview $(STDCPPLIBS)
++LIBS = be tracker shared localestub translation sqlite3 $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

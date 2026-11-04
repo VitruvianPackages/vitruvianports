@@ -1,0 +1,19 @@
+Description: pass the help text as a printf argument
+ main() called printf(sHelp) with the string used directly as the format
+ string; Debian's -Werror=format-security (injected by dh) rejects that,
+ and any '%' in the translated text would have been interpreted as a
+ conversion. Use printf("%s", sHelp).
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Moe
+--- a/source/MoeApplication.cpp
++++ b/source/MoeApplication.cpp
+@@ -328,7 +328,7 @@
+ main(int argc, char **argv)
+ {
+   if (argc == 1)
+-    printf(sHelp);
++    printf("%s", sHelp);
+ 
+   MoeApplication().Run();
+ }

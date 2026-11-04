@@ -1,0 +1,19 @@
+Description: end the volume walk on B_INVALID_DEV, not on a sign test
+ dev_t is unsigned here, so ">= B_OK" is always true and the index
+ setup walked the volume list forever, leaving the window unshown and
+ the app deaf to its quit message. Compare with B_INVALID_DEV, which
+ next_dev() returns at the end of the list.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/src/db/QueryDBManager.cpp
++++ b/src/db/QueryDBManager.cpp
+@@ -876,7 +876,7 @@
+ 	int32 cookie = 0;
+ 	dev_t device;
+ 
+-	while ((device = next_dev(&cookie)) >= B_OK) {
++	while ((device = next_dev(&cookie)) != B_INVALID_DEV) {
+ 		fs_info info;
+ 		if (fs_stat_dev(device, &info) < 0
+ 			|| (info.flags & B_FS_HAS_QUERY) == 0)

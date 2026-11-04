@@ -1,0 +1,354 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: add a serial-port compat header for the tablet support
+Forwarded: not-needed
+Author: Numerio <b.vitruvio@gmail.com>
+Description:
+ The tablet driver talks to a serial port through the legacy device
+ kit class, which does not exist on V\OS. This header supplies the
+ subset Becasso uses (open/close, rate, flow control, blocking, read,
+ write, flush) over POSIX termios so tablet detection behaves the same
+ way as it did on the legacy platform; without it the app and its
+ settings code do not compile.
+
+--- a/source/device/SerialPort.h
++++ b/source/device/SerialPort.h
+@@ -0,0 +1,339 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ *
++ * Serial port class for V\OS. The legacy device kit serial API this
++ * project was written against does not exist here; this header stands
++ * in for <device/SerialPort.h> with the subset Becasso's tablet
++ * support uses, backed by POSIX termios.
++ */
++
++#ifndef _VOS_DEVICE_SERIAL_PORT_H
++#define _VOS_DEVICE_SERIAL_PORT_H
++
++#include <SupportDefs.h>
++#include <OS.h>
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/select.h>
++#include <termios.h>
++#include <unistd.h>
++
++
++enum {
++	B_50_BPS		= 50,
++	B_75_BPS		= 75,
++	B_110_BPS		= 110,
++	B_134_BPS		= 134,
++	B_150_BPS		= 150,
++	B_200_BPS		= 200,
++	B_300_BPS		= 300,
++	B_600_BPS		= 600,
++	B_1200_BPS		= 1200,
++	B_1800_BPS		= 1800,
++	B_2400_BPS		= 2400,
++	B_4800_BPS		= 4800,
++	B_9600_BPS		= 9600,
++	B_19200_BPS		= 19200,
++	B_38400_BPS		= 38400,
++	B_57600_BPS		= 57600,
++	B_115200_BPS	= 115200,
++	B_230400_BPS	= 230400
++};
++
++
++enum {
++	B_NOFLOW_CONTROL,
++	B_HARDWARE_FLOW_CONTROL,
++	B_XON_XOFF_FLOW_CONTROL
++};
++
++
++class BSerialPort {
++public:
++							BSerialPort();
++							~BSerialPort();
++
++			status_t		Open(const char* path);
++			void			Close();
++
++			status_t		SetDataRate(uint32 rate);
++			status_t		SetFlowControl(uint32 mode);
++			status_t		SetBlocking(bool block);
++			void			SetTimeout(int32 milliseconds);
++
++			long			Read(void* buffer, size_t size);
++			long			Write(const void* buffer, size_t size);
++			void			ClearInput();
++			void			ClearOutput();
++
++private:
++			static speed_t	_SpeedFor(uint32 rate);
++			int				MapDevice(const char* path, char* target,
++								size_t size) const;
++
++private:
++			int				fFd;
++			uint32			fRate;
++			uint32			fFlow;
++			bool			fNonBlocking;
++			int32			fTimeout;
++};
++
++
++inline
++BSerialPort::BSerialPort()
++	:
++	fFd(-1),
++	fRate(B_9600_BPS),
++	fFlow(B_NOFLOW_CONTROL),
++	fNonBlocking(false),
++	fTimeout(0)
++{
++}
++
++
++inline
++BSerialPort::~BSerialPort()
++{
++	Close();
++}
++
++
++inline speed_t
++BSerialPort::_SpeedFor(uint32 rate)
++{
++	switch (rate) {
++		case B_50_BPS:		return B50;
++		case B_75_BPS:		return B75;
++		case B_110_BPS:		return B110;
++		case B_134_BPS:		return B134;
++		case B_150_BPS:		return B150;
++		case B_200_BPS:		return B200;
++		case B_300_BPS:		return B300;
++		case B_600_BPS:		return B600;
++		case B_1200_BPS:	return B1200;
++		case B_1800_BPS:	return B1800;
++		case B_2400_BPS:	return B2400;
++		case B_4800_BPS:	return B4800;
++		case B_19200_BPS:	return B19200;
++		case B_38400_BPS:	return B38400;
++		case B_57600_BPS:	return B57600;
++		case B_115200_BPS:	return B115200;
++		case B_230400_BPS:	return B230400;
++		default:			break;
++	}
++
++	return B9600;
++}
++
++
++inline int
++BSerialPort::MapDevice(const char* path, char* target, size_t size) const
++{
++	if (path == NULL || path[0] == '\0')
++		return -1;
++
++	if (path[0] == '/') {
++		strncpy(target, path, size - 1);
++		target[size - 1] = '\0';
++		return 0;
++	}
++
++	// The legacy names are "serial1".."serial4" and friends; map them
++	// onto the POSIX serial devices.
++	if (strncmp(path, "serial", 6) == 0 && path[6] >= '1' && path[6] <= '9') {
++		snprintf(target, size, "/dev/ttyS%c", path[6] - '1');
++		return 0;
++	}
++
++	snprintf(target, size, "/dev/%s", path);
++	return 0;
++}
++
++
++inline status_t
++BSerialPort::Open(const char* path)
++{
++	Close();
++
++	char device[256];
++	if (MapDevice(path, device, sizeof(device)) != 0)
++		return -1;
++
++	int flags = O_RDWR | O_NOCTTY;
++	if (fNonBlocking)
++		flags |= O_NONBLOCK;
++
++	fFd = open(device, flags);
++	if (fFd < 0)
++		return -1;
++
++	struct termios settings;
++	if (tcgetattr(fFd, &settings) == 0) {
++		cfsetispeed(&settings, _SpeedFor(fRate));
++		cfsetospeed(&settings, _SpeedFor(fRate));
++
++		settings.c_cflag &= ~(CRTSCTS | IXON | IXOFF);
++		if (fFlow == B_HARDWARE_FLOW_CONTROL)
++			settings.c_cflag |= CRTSCTS;
++		else if (fFlow == B_XON_XOFF_FLOW_CONTROL)
++			settings.c_cflag |= IXON | IXOFF;
++
++		settings.c_cflag |= CLOCAL | CREAD;
++		settings.c_cflag &= ~PARENB;
++		settings.c_cflag &= ~CSTOPB;
++		settings.c_cflag &= ~CSIZE;
++		settings.c_cflag |= CS8;
++		settings.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
++		settings.c_iflag &= ~(ICRNL | INLCR | IGNCR | IXANY);
++		settings.c_oflag &= ~OPOST;
++		settings.c_cc[VMIN] = 1;
++		settings.c_cc[VTIME] = 0;
++		tcsetattr(fFd, TCSANOW, &settings);
++	}
++
++	// Callers only test the result against zero.
++	return 1;
++}
++
++
++inline void
++BSerialPort::Close()
++{
++	if (fFd >= 0) {
++		close(fFd);
++		fFd = -1;
++	}
++}
++
++
++inline status_t
++BSerialPort::SetDataRate(uint32 rate)
++{
++	fRate = rate;
++	if (fFd < 0)
++		return B_OK;
++
++	struct termios settings;
++	if (tcgetattr(fFd, &settings) != 0)
++		return B_ERROR;
++
++	cfsetispeed(&settings, _SpeedFor(rate));
++	cfsetospeed(&settings, _SpeedFor(rate));
++
++	if (tcsetattr(fFd, TCSANOW, &settings) != 0)
++		return B_ERROR;
++
++	return B_OK;
++}
++
++
++inline status_t
++BSerialPort::SetFlowControl(uint32 mode)
++{
++	fFlow = mode;
++	if (fFd < 0)
++		return B_OK;
++
++	struct termios settings;
++	if (tcgetattr(fFd, &settings) != 0)
++		return B_ERROR;
++
++	settings.c_cflag &= ~(CRTSCTS | IXON | IXOFF);
++	if (mode == B_HARDWARE_FLOW_CONTROL)
++		settings.c_cflag |= CRTSCTS;
++	else if (mode == B_XON_XOFF_FLOW_CONTROL)
++		settings.c_cflag |= IXON | IXOFF;
++
++	if (tcsetattr(fFd, TCSANOW, &settings) != 0)
++		return B_ERROR;
++
++	return B_OK;
++}
++
++
++inline status_t
++BSerialPort::SetBlocking(bool block)
++{
++	fNonBlocking = !block;
++	if (fFd < 0)
++		return B_OK;
++
++	int flags = fcntl(fFd, F_GETFL);
++	if (flags < 0)
++		return B_ERROR;
++
++	if (block)
++		flags &= ~O_NONBLOCK;
++	else
++		flags |= O_NONBLOCK;
++
++	if (fcntl(fFd, F_SETFL, flags) < 0)
++		return B_ERROR;
++
++	return B_OK;
++}
++
++
++inline void
++BSerialPort::SetTimeout(int32 milliseconds)
++{
++	fTimeout = milliseconds;
++}
++
++
++inline long
++BSerialPort::Read(void* buffer, size_t size)
++{
++	if (fFd < 0 || buffer == NULL)
++		return -1;
++
++	if (!(fNonBlocking) && fTimeout > 0) {
++		fd_set set;
++		FD_ZERO(&set);
++		FD_SET(fFd, &set);
++
++		struct timeval timeout;
++		timeout.tv_sec = fTimeout / 1000;
++		timeout.tv_usec = (fTimeout % 1000) * 1000;
++
++		int ready = select(fFd + 1, &set, NULL, NULL, &timeout);
++		if (ready <= 0)
++			return -1;
++	}
++
++	return read(fFd, buffer, size);
++}
++
++
++inline long
++BSerialPort::Write(const void* buffer, size_t size)
++{
++	if (fFd < 0 || buffer == NULL)
++		return -1;
++
++	return write(fFd, buffer, size);
++}
++
++
++inline void
++BSerialPort::ClearInput()
++{
++	if (fFd >= 0)
++		tcflush(fFd, TCIFLUSH);
++}
++
++
++inline void
++BSerialPort::ClearOutput()
++{
++	if (fFd >= 0)
++		tcflush(fFd, TCOFLUSH);
++}
++
++
++#endif // _VOS_DEVICE_SERIAL_PORT_H

@@ -1,0 +1,56 @@
+Description: viewer sources: include math.h explicitly
+ Four viewer sources call sqrt/fabs/pow without including math.h
+ themselves, relying on transitive includes that the V\OS headers do
+ not provide.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/BePDF
+
+diff --git a/bepdf/beos/AnnotAppearance.cpp b/bepdf/beos/AnnotAppearance.cpp
+index 564c483..5e5d3eb 100644
+--- a/bepdf/beos/AnnotAppearance.cpp
++++ b/bepdf/beos/AnnotAppearance.cpp
+@@ -30,6 +30,7 @@
+ #include "AnnotAppearance.h"
+ 
+ #include <ctype.h>
++#include <math.h>
+ 
+ // Implementation of A85Encoder
+ 
+diff --git a/bepdf/beos/AnnotationRenderer.cpp b/bepdf/beos/AnnotationRenderer.cpp
+index 01fb4c8..8a0e92d 100644
+--- a/bepdf/beos/AnnotationRenderer.cpp
++++ b/bepdf/beos/AnnotationRenderer.cpp
+@@ -26,6 +26,7 @@
+ #include "TextConversion.h"
+ 
+ #include <ctype.h>
++#include <math.h>
+ 
+ #include <Bitmap.h>
+ #include <Polygon.h>
+diff --git a/bepdf/beos/PDFSearch.cpp b/bepdf/beos/PDFSearch.cpp
+index 98ac475..ac3ecf8 100644
+--- a/bepdf/beos/PDFSearch.cpp
++++ b/bepdf/beos/PDFSearch.cpp
+@@ -26,6 +26,7 @@
+ 
+ // xpdf
+ #include <TextOutputDev.h>
++#include <math.h>
+ 
+ // BePDF
+ #include "CachedPage.h"
+diff --git a/bepdf/beos/PageRenderer.cpp b/bepdf/beos/PageRenderer.cpp
+index c8f02ae..02318e7 100644
+--- a/bepdf/beos/PageRenderer.cpp
++++ b/bepdf/beos/PageRenderer.cpp
+@@ -33,6 +33,7 @@
+ #include <be/storage/Entry.h>
+ #include <be/storage/Path.h>
+ #include <Debug.h>
++#include <math.h>
+ 
+ #include "BepdfApplication.h" // for images only
+ #include "PageRenderer.h"

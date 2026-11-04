@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=Becasso
+GenericName=Graphics Editor
+Comment=Layer-based paint and imaging program
+Exec=Becasso
+Icon=becasso
+Terminal=false
+Categories=Graphics;2DGraphics;RasterGraphics;
+MimeType=image/png;image/jpeg;image/gif;image/bmp;image/tiff;image/x-becasso;
+StartupNotify=true

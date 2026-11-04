@@ -1,0 +1,20 @@
+Description: link only libraries V\OS ships
+ The Makefile lists -lnetwork and -lcolumnlistview. V\OS ships neither:
+ there is no network kit library (the sources are already POSIX
+ sockets and never touch it), and the ColumnListView classes live in
+ libbe, which the Makefile already links. Drop the two names so the
+ link resolves.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/FtpPositive
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -74,7 +74,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be shared localestub network translation tracker columnlistview  $(STDCPPLIBS)
++LIBS = be shared localestub translation tracker  $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

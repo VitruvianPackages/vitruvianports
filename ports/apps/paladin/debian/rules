@@ -1,0 +1,3 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine --sourcedirectory=Paladin

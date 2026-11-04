@@ -1,0 +1,24 @@
+Description: link the MusicBrainz C++ API as musicbrainz5cc
+ Debian splits MusicBrainz 5 into the C library (libmusicbrainz5, no C++
+ symbols) and the C++ one (libmusicbrainz5cc, where MusicBrainz5::CQuery
+ and friends live); the legacy platform ships a single libmusicbrainz5 that is the C++
+ library the sources use. Debian's -dev package ships both .so names, so
+ the V\OS build links musicbrainz5cc.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/Makefile
++++ b/Makefile
+@@ -82,7 +82,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be tag translation localestub $(STDCPPLIBS) musicbrainz5 tracker
++LIBS = be tag translation localestub $(STDCPPLIBS) musicbrainz5cc tracker
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

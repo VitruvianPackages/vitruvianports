@@ -1,0 +1,51 @@
+Description: replace kill/suspend_thread in ThreadObject with cooperative stops
+ KillThread() called kill_thread(), which on VOS kills the whole team
+ instead of one thread, and the destructor runs that path on the worker
+ thread itself (ThreadFinished() deletes this object). Self-teardown now
+ just lets the thread return; for a foreign thread id the wrapper reaps
+ with wait_for_thread() and then notifies. SuspendThread() reports
+ B_NOT_SUPPORTED (VOS has no per-thread suspend) - nothing in this tree
+ calls it.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/TraX
+--- a/Common/Support/ThreadObject.cpp
++++ b/Common/Support/ThreadObject.cpp
+@@ -52,15 +52,35 @@
+ 
+ status_t Threads:: ThreadObject:: KillThread( void ) 
+ {
+-	status_t s = kill_thread( fThread ) ;
++	if( fThread < 0 )
++		return B_BAD_VALUE ;
++
++	// Self-teardown path: ThreadFinished() deletes this object, whose
++	// destructor lands here on the worker thread itself. kill_thread()
++	// would take the whole team with it on VOS, and the thread is on its
++	// way out anyway -- just let it return.
++	if( fThread == find_thread( NULL ) )
++		return B_OK ;
++
++	// No other caller exists in this tree; cooperative semantics are to
++	// reap the worker once its task finishes (there is no cancellation
++	// point inside findlib_find) and then notify.
++	status_t s ;
++	status_t result = B_OK ;
++	s = wait_for_thread( fThread, &result ) ;
+ 	if( s == B_OK )
++	{
++		fThread = -1 ;
+ 		ThreadKilled() ;
++	}
+ 	return s ;
+ }
+ 
+ status_t Threads:: ThreadObject:: SuspendThread( void )
+ {
+-	return suspend_thread( fThread ) ;
++	// VOS has no per-thread suspend (B_NOT_SUPPORTED), and this tree has
++	// no caller: keep the API honest instead of faking a stop.
++	return B_NOT_SUPPORTED ;
+ }
+ status_t Threads:: ThreadObject:: ResumeThread( void )
+ {

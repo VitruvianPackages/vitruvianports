@@ -1,0 +1,4 @@
+0001-Makefile-V-OS-sources-and-libraries.patch
+0002-StreamIO-read-HTTP-ICY-through-the-network-kit.patch
+0003-Station-probe-the-audio-header-off-the-probe-bytes.patch
+0004-StreamPlayer-re-target-playback-to-media2.patch

@@ -1,0 +1,46 @@
+#!/usr/bin/make -f
+
+# Main/ links as a shared object that is still executable, so the Deskbar can load the replicant.
+
+include /usr/share/dh-vos/runnable-addon.mk
+RUNNABLE_LDFLAGS += -Wl,--no-undefined
+
+DIRS := Main Input_Device Input_Filter Input_Filter_Ctrl-V
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure: runnable-addon-interp
+
+override_dh_auto_clean: runnable-addon-clean
+	# Object trees are in-source and a flag change does not relink.
+	rm -rf Main/obj "Input Device/obj" "Input Filter/obj" \
+		"Input Filter Ctrl-V/obj"
+
+override_dh_auto_build:
+	for d in "Main" "Input Device" "Input Filter" "Input Filter Ctrl-V"; do \
+		mkdir -p "$$d/obj"; \
+		if [ "$$d" = "Main" ]; then \
+			set -- TYPE=SHARED LINKER_FLAGS="$(RUNNABLE_LDFLAGS)"; \
+		else \
+			set --; \
+		fi; \
+		LINK_LIBS=-lroot $(MAKE) -C "$$d" DEVEL_DIRECTORY=/ \
+			OBJ_DIR=obj COMPILER_FLAGS=-fPIC "$$@" \
+			-j$(shell nproc 2>/dev/null || echo 2) || exit 1; \
+	done
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	# application + input-server add-ons (legacy add-on locations)
+	install -m 0755 -D "Main/obj/ClipUp" \
+		$(CURDIR)/debian/clipup/system/apps/ClipUp
+	install -m 0755 -D "Input Device/obj/ClipUpInputDevice" \
+		$(CURDIR)/debian/clipup/system/add-ons/input_server/devices/ClipUpInputDevice
+	install -m 0755 -D "Input Filter/obj/ClipUpInputFilter" \
+		$(CURDIR)/debian/clipup/system/add-ons/input_server/filters/ClipUpInputFilter
+	install -m 0755 -D "Input Filter Ctrl-V/obj/ClipUpInputFilterCtrlV" \
+		$(CURDIR)/debian/clipup/system/add-ons/input_server/filters/ClipUpInputFilterCtrlV
+	@echo "clipup: catkeys files: $$(find . -name '*.catkeys' | wc -l)"

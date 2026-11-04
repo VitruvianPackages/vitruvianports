@@ -1,0 +1,30 @@
+Description: stop the device thread cooperatively instead of kill_thread
+ The destructor reaped the device message-loop thread with kill_thread(),
+ which on VOS kills the whole team instead of one thread. Stop() already
+ hands the loop its QUIT_COMMAND through the port and waits for it to be
+ consumed; send that if the port is still open, then wait_for_thread()
+ the thread.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/KeyCursor
+--- a/src/KeyCursorDevice.cpp
++++ b/src/KeyCursorDevice.cpp
+@@ -66,10 +66,14 @@
+ 
+ KeyCursorDevice::~KeyCursorDevice()
+ {
+-	if (fThreadID != -1) {
+-		// just in case.
+-		kill_thread(fThreadID);
+-	}
++	// Cooperative stop: kill_thread() would take the whole team on VOS.
++	// Stop() already hands the loop its QUIT_COMMAND through the port;
++	// send that if the port is still open, then reap the thread.
++	thread_id tid = fThreadID;
++	if (fPortID > 0)
++		Stop(NULL, NULL);
++	if (tid != -1)
++		wait_for_thread(tid, NULL);
+ }
+ 
+ 

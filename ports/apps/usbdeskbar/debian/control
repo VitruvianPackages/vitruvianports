@@ -1,0 +1,19 @@
+Source: usbdeskbar
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libudev-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/USBDeskbar
+
+Package: usbdeskbar
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: USB device list tray item for V\OS
+ USBDeskbar shows a Deskbar tray item that lists connected USB devices
+ in a popup menu; selecting one opens an information window with ids,
+ class codes and the active configuration's interfaces and endpoints.
+ .
+ This build shows only the active configuration; class-specific raw
+ descriptors are not listed.

@@ -1,0 +1,16 @@
+Source: tipster
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Tipster
+
+Package: tipster
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: on-screen usability tips for V\OS
+ Tipster shows short, randomly picked usability tips in a small window
+ - optionally on a timer - drawn from the tip collection it ships, with
+ a shuffle feature and full localization (twenty-one languages).

@@ -1,0 +1,35 @@
+Description: take ownership through the BObjectList template parameter
+ V\OS carries object ownership as the second template parameter of
+ BObjectList (template<class T, bool Owning>) and only offers the
+ itemsPerBlock constructor, so the legacy BObjectList(20, true) form does
+ not compile. Owning the records is what upstream asks for, so declare
+ BObjectList<Queryable, true> and construct with (20).
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/source/querywindow.h
++++ b/source/querywindow.h
+@@ -46,7 +46,7 @@
+ 			private:
+ 				BMessenger m_reply_to;
+ 				Query* m_query;
+-				BObjectList<Queryable> m_records;
++				BObjectList<Queryable, true> m_records;
+ 		};
+ 
+ 		Worker* m_worker;
+--- a/source/querywindow.cpp
++++ b/source/querywindow.cpp
+@@ -128,7 +128,7 @@
+ 	BLooper(),
+ 	m_query(query),
+ 	m_reply_to(reply_to),
+-	m_records(20, true)
++	m_records(20)
+ {
+ 	PRINT(("QueryWindow::Worker::Worker(Query*, BMessenger)\n"));
+ }

@@ -1,0 +1,68 @@
+--- a/source/InnerPanelIcons.cpp
++++ b/source/InnerPanelIcons.cpp
+@@ -459,27 +464,28 @@
+ 			{
+ 				if ( opcode == B_ENTRY_MOVED )
+ 				{
+-					node_ref nref;
+-					dev_t dev;
+-					message->FindInt32( "device", &dev );
+-					nref.device = dev;
+-					message->FindInt64( "to directory", &nref.node );
+-					BDirectory dir( &nref );
+-					BPath path( &dir, NULL, false );
+-					BVolume vol( dev );
+-					BPath trashpath;
+-					find_directory( B_TRASH_DIRECTORY, &trashpath, false, &vol );
+-					if ( trashpath == path )
+-						opcode = B_ENTRY_REMOVED;
++					// VOS node-monitor messages carry refs, not integer
++					// device/node fields; "virtual:to directory" is the
++					// moved-to entry (parent directory + name).
++					entry_ref toRef;
++					if ( message->FindRef( "virtual:to directory", &toRef ) == B_OK )
++					{
++						node_ref dirNode( toRef.device(), toRef.directory() );
++						BDirectory dir( &dirNode );
++						BPath path( &dir, NULL, false );
++						BVolume vol( toRef.device() );
++						BPath trashpath;
++						find_directory( B_TRASH_DIRECTORY, &trashpath, false, &vol );
++						if ( trashpath == path )
++							opcode = B_ENTRY_REMOVED;
++					}
+ 				}
+ 
+ 				if ( opcode == B_ATTR_CHANGED )
+ 				{
+ 					node_ref nref;
+-					message->FindInt32( "device", &nref.device );
+-					message->FindInt64( "node", &nref.node );
+-
+-					if ( nref == fNode )
++					if ( message->FindNodeRef( "virtual:node", &nref ) == B_OK
++						&& nref == fNode )
+ 					{
+ 						ReloadIcons();
+ 						fParent->Invalidate(this);
+@@ -491,15 +497,12 @@
+ 				}
+ 				else
+ 				{
++					// "virtual:directory" is the created entry itself
++					// (parent directory + name), so no separate name field
++					// is needed.
+ 					entry_ref ref;
+-					const char *name;
+-
+-					message->FindInt32( "device", &ref.device );
+-					message->FindInt64( "directory", &ref.directory );
+-					message->FindString( "name", &name );
+-					ref.set_name( name );
+-
+-					SetRefTo( ref );
++					if ( message->FindRef( "virtual:directory", &ref ) == B_OK )
++						SetRefTo( ref );
+ 				}
+ 			}
+ 			break;

@@ -1,0 +1,34 @@
+#!/usr/bin/make -f
+
+# Custom makefile; CFLAGS is replaced to add the default include path.
+
+SPEC_INCLUDES := $(shell grep -oE '^-I.*' /etc/vos.specs | sed 's/^-I/-isystem /' | tr '\n' ' ' | sed 's/ *$$//')
+
+# Link as a shared object that is still executable, so the Deskbar can load the replicant.
+include /usr/share/dh-vos/runnable-addon.mk
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure: runnable-addon-interp
+
+override_dh_auto_build:
+	$(MAKE) CFLAGS="-O3 -fPIC -shared $(RUNNABLE_LDFLAGS) -Wall -Wno-multichar $(SPEC_INCLUDES) -include LinuxBuildCompatibility.h" \
+		-j$(shell nproc 2>/dev/null || echo 2)
+
+override_dh_auto_clean: runnable-addon-clean
+	dh_auto_clean
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D DeskbarEyes \
+		$(CURDIR)/debian/deskbareyes/system/apps/DeskbarEyes
+	# The replicant loads its eye bitmaps from /system/data/DeskbarEyes/Images.
+	install -d $(CURDIR)/debian/deskbareyes/system/data/DeskbarEyes/Images
+	install -m 0644 -D Images/Left_Eyes \
+		$(CURDIR)/debian/deskbareyes/system/data/DeskbarEyes/Images/Left_Eyes
+	install -m 0644 -D Images/Right_Eyes \
+		$(CURDIR)/debian/deskbareyes/system/data/DeskbarEyes/Images/Right_Eyes
+	@echo "deskbareyes: catkeys files: $$(find . -name '*.catkeys' | wc -l), catalogs built: 0"

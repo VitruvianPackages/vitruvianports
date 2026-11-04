@@ -1,0 +1,30 @@
+#!/usr/bin/make -f
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+# jam port; build flags and layout fixes live in debian/patches.
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_build:
+	jam
+
+override_dh_auto_test:
+	:
+
+override_dh_auto_install:
+	jam install
+
+override_dh_installdocs:
+	dh_installdocs
+	mkdir -p debian/becasso/usr/share/doc/becasso/Documentation \
+		debian/becasso/usr/share/doc/becasso/Tutorials
+	cp -a "documentation/Becasso 2.0/." \
+		debian/becasso/usr/share/doc/becasso/Documentation/
+	cp -a source/BecassoAPI2.0/API \
+		debian/becasso/usr/share/doc/becasso/Documentation/API
+	cp -a documentation/Tutorials/. \
+		debian/becasso/usr/share/doc/becasso/Tutorials/
+
+override_dh_auto_clean:
+	jam clean
+	rm -rf target

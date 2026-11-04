@@ -1,0 +1,17 @@
+Source: ponpokodiff
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/PonpokoDiff
+
+Package: ponpokodiff
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: two-file visual diff viewer for V\OS
+ PonpokoDiff graphically compares two text files side by side: changed
+ lines are yellow, removed lines red, added lines green. Double-click
+ opens the left or right file with its preferred application, and
+ renamed or moved files are offered for reload.

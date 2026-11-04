@@ -1,0 +1,20 @@
+Description: Include Messenger.h for BMessenger
+ process_refs constructs a BMessenger to hand the resulting refs to
+ Tracker. The upstream file relies on the legacy headers pulling
+ Messenger.h in transitively; the packaged headers do not, so BMessenger
+ is an incomplete type and the build stops. Include it explicitly; the
+ application signature the messenger targets matches what V\OS Tracker
+ ships.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- a/sources/opentargetfolder.cpp
++++ b/sources/opentargetfolder.cpp
+@@ -9,6 +9,7 @@
+ #include <Path.h>
+ #include <Entry.h>
+ #include <Alert.h>
++#include <Messenger.h>
+ 
+ #include <stdio.h>
+ #include <string.h>

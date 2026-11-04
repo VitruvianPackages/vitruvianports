@@ -1,0 +1,15 @@
+Source: keycursor
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/KeyCursor
+
+Package: keycursor
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: keyboard-as-mouse input add-on and settings preflet
+ KeyCursor lets the keyboard drive the mouse cursor. It ships as an
+ input-server add-on plus a settings preflet application.

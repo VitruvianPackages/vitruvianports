@@ -1,0 +1,8 @@
+0001-Makefile-drive-the-makefile-engine-sub-builds.patch
+0002-Makefiles-system-include-paths-taglib-debian.patch
+0003-Makefiles-link-media2-and-libbe-columnlistview.patch
+0004-node-monitor-refs-and-dev_t-width.patch
+0005-AEEncoder-export-with-gcc-visibility.patch
+0006-BeEncoder-media2-format-adaptation.patch
+0007-Makefiles-compile-PIC-for-add-ons.patch
+0008-addons-from-system-addons.patch

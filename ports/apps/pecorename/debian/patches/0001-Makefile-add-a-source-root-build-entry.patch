@@ -1,0 +1,127 @@
+Description: add a source-root Makefile for the class-1 build
+ The debhelper class builds and installs in the source root and reads
+ obj/$(NAME), locales/ and obj/*.rsrc relative to it, but upstream keeps
+ its Makefile under Main/ (NAME = ../PecoRename, paths relative to Main/,
+ catkeys in Main/locales). Without a root Makefile there is nothing to
+ build at the root at all. This root Makefile mirrors Main/Makefile
+ except for the Main/-prefixed paths, a plain NAME so the engine target
+ and the class install step agree, a parse-time link that exposes
+ Main/locales as locales so the class compiles the shipped catalog
+ files, and a LIBS line without the columnlistview entry: V\OS ships
+ ColumnListView/ColumnTypes inside libbe (nm -D libbe.so exports them)
+ and no libcolumnlistview.so exists, so the original entry dies with
+ "cannot find -lcolumnlistview". Upstream's Main/Makefile is left
+ untouched for its own "cd Main && make" flow.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/PecoRename
+
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,106 @@
++## V\OS class-1 build entry for PecoRename.
++
++# The debhelper class builds and installs from the source root (it
++# enforces in-source building), while upstream keeps its Makefile under
++# Main/ with paths relative to it. This root Makefile mirrors
++# Main/Makefile with Main/-prefixed paths and a plain NAME so the engine
++# target (obj/$(NAME)) and the class install step agree; upstream's
++# Main/Makefile stays untouched. LIBS also loses the
++# columnlistview entry - V\OS ships those classes inside libbe, and no
++# libcolumnlistview.so exists (see the patch header).
++
++# specify the name of the binary
++NAME = PecoRename
++
++# specify the type of binary
++TYPE = APP
++
++# specify the application MIME signature
++APP_MIME_SIG = application/x-vnd.pecora-PecoRename
++
++#	specify the source files to use
++SRCS = Main/ConsistencyCheck.cpp \
++	Main/ContextPopUp.cpp \
++	Main/DateColumn.cpp \
++	Main/FileListItem.cpp \
++	Main/FileListView.cpp \
++	Main/functions.cpp \
++	Main/main.cpp \
++	Main/MainView.cpp \
++	Main/MainWindow.cpp \
++	Main/PecoApp.cpp \
++	Main/PreviewColumn.cpp \
++	Main/Renamer.cpp \
++	Main/Renamer_Extension.cpp \
++	Main/Renamer_InsertOverwrite.cpp \
++	Main/Renamer_Numbering.cpp \
++	Main/Renamer_Random.cpp \
++	Main/Renamer_Remove.cpp \
++	Main/Renamer_SearchReplace.cpp \
++	Main/Renamer_UpperLower.cpp \
++	Main/ReportWindow.cpp \
++	Main/StatusView.cpp
++
++#	specify the resource definition files to use
++RDEFS = Main/PecoRename.rdef
++
++#	specify the resource files to use
++RSRCS =
++
++#	specify additional libraries to link against
++#	no columnlistview entry; V\OS provides those classes
++#	inside libbe and ships no libcolumnlistview.so.
++LIBS = be localestub textencoding tracker $(STDCPPLIBS)
++
++#	specify additional paths to directories following the standard
++#	libXXX.so or libXXX.a naming scheme
++LIBPATHS =
++
++#	additional paths to look for system headers
++SYSTEM_INCLUDE_PATHS = /system/develop/headers/private/interface \
++	/system/develop/headers/private/shared/
++
++#	additional paths to look for local headers
++LOCAL_INCLUDE_PATHS =
++
++#	specify the level of optimization that you desire
++OPTIMIZE = FULL
++
++#	specify the codes for languages you are going to support
++LOCALES = ca cs de en_AU en_GB en es-419 es fr fur it nb nl pl pt ro ru sv tr uk zh-Hans
++
++#	specify any preprocessor symbols to be defined
++DEFINES =
++
++#	specify special warning levels
++WARNINGS =
++
++#	specify whether image symbols will be created
++SYMBOLS =
++
++#	specify debug settings
++DEBUGGER =
++
++#	specify additional compiler flags for all files
++COMPILER_FLAGS = -Woverloaded-virtual -funsigned-bitfields -Wwrite-strings
++
++#	specify additional linker flags
++LINKER_FLAGS =
++
++#	specify the version of this particular item
++APP_VERSION =
++
++#	(only for TYPE == DRIVER)
++DRIVER_PATH =
++
++# The class reads the catkeys from <source root>/locales and the engine
++# compiles catalogs relative to the current directory, while upstream
++# keeps them in Main/locales. Expose them at the root for every make run
++# (the generic Makefile already shells out at parse time, so this is the
++# same mechanism).
++$(shell ln -sfn Main/locales locales)
++
++## include the makefile-engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

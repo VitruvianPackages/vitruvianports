@@ -1,0 +1,23 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: DeskNotes
+Source: https://github.com/HaikuArchives/DeskNotes
+
+Files: *
+Copyright: 2000-2023 Colin Stewart and DeskNotes contributors
+License: BSD-3-clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ 1. Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+ .
+ (Upstream LICENSE.txt carries the two-clause text above; see the shipped
+ copyright file for the full verbatim license.)
+License: BSD-3-clause
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: BSD-3-clause

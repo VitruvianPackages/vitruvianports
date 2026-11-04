@@ -1,0 +1,24 @@
+Description: build: link the VOS platform libraries only
+ LIBS lists the split legacy interface and network libraries
+ (columnlistview, network, bnetapi). VOS compiles all of them into
+ libbe and ships no standalone libraries under those names, so
+ -lcolumnlistview, -lnetwork and -lbnetapi fail at link time. The
+ remaining names (be, translation, textencoding, tracker,
+ localestub) all exist.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: own
+
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -107,8 +107,8 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be columnlistview translation textencoding tracker network \
+-	bnetapi localestub $(STDCPPLIBS)
++LIBS = be translation textencoding tracker \
++	localestub $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

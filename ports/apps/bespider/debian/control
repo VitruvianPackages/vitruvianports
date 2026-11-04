@@ -1,0 +1,15 @@
+Source: bespider
+Section: games
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BeSpider
+
+Package: bespider
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Spider solitaire for V\OS
+ BeSpider is a spider solitaire card game. Build columns of cards from
+ King down to Ace; clear every column to win.

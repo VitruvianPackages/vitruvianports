@@ -1,0 +1,5 @@
+0001-build-the-rdef-from-source-where-the-file-ships.patch
+0002-drop-columnlistview-from-LIBS-libbe-provides-it-here.patch
+0003-read-the-ref-device-through-its-accessor.patch
+0004-take-ownership-through-the-BObjectList-template-parameter.patch
+0005-link-the-MusicBrainz-C++-API-as-musicbrainz5cc.patch

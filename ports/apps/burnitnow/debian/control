@@ -1,0 +1,16 @@
+Source: burnitnow
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BurnItNow
+
+Package: burnitnow
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: CD/DVD burning frontend for V\OS
+ BurnItNow is a graphical frontend for the cdrecord, readcd and mkisofs
+ command line tools: audio and data compilations, disc cloning and
+ on-the-fly copying, with a localized interface.

@@ -1,0 +1,23 @@
+Description: do not keep deleted thread rows in the removal list
+ RemoveProcessItems() deleted every ThreadItem in the first pass but
+ left the dangling pointers in the same BList the second pass re-reads;
+ casting freed rows worked only because the legacy allocator kept the
+ pages mapped, and faults with a segmentation violation on VOS (crash
+ trace: MainWindow.cpp:412, dynamic_cast on freed memory). Remove each
+ handled entry from the list as it is deleted.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Slayer
+--- a/src/MainWindow.cpp
++++ b/src/MainWindow.cpp
+@@ -404,6 +404,10 @@ MainWindow::RemoveProcessItems(BList* items)
+ 				team_item->thread_items_list->del(p1->thread);
+ 
+ 			delete p1;
++			// Drop the dangling pointer: the second pass below re-reads
++			// this list, and casting deleted rows faults on VOS (the
++			// legacy allocator used to keep the pages mapped).
++			items->RemoveItem(i--);
+ 		}
+ 	}
+ 

@@ -1,0 +1,16 @@
+Source: dockbert
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/DockBert
+
+Package: dockbert
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: dock panel for application icons and folders
+ DockBert is a dock: a panel of application icons, folders and Tracker
+ items that can run standalone or be embedded, with an options inner
+ panel and Tracker-aware menus.

@@ -1,0 +1,77 @@
+--- a/source/DiffWindow.cpp
++++ b/source/DiffWindow.cpp
+@@ -305,8 +305,7 @@
+ 			node_ref nref;
+ 			int32 fields;
+ 
+-			if (message->FindInt32("device", &nref.device) != B_OK
+-				|| message->FindInt64("node", &nref.node) != B_OK
++			if (message->FindNodeRef("virtual:node", &nref) != B_OK
+ 				|| message->FindInt32("fields", &fields) != B_OK)
+ 					break;
+ 
+@@ -318,17 +317,15 @@
+ 
+ 		case B_ENTRY_MOVED:
+ 		{
+-			int32 device = 0;
+-			int64 dstFolder = 0;
++			entry_ref dstFolder;
+ 			const char* oldName = NULL;
+ 			const char* newName = NULL;
+-			if (message->FindInt32("device", &device) != B_OK
+-				|| message->FindInt64("to directory", &dstFolder) != B_OK
++			if (message->FindRef("virtual:to directory", &dstFolder) != B_OK
+ 				|| message->FindString("name", &newName) != B_OK
+ 				|| message->FindString("from name", &oldName) != B_OK)
+ 					break;
+ 
+-			entry_ref newRef(device, dstFolder, newName);
++			entry_ref newRef(dstFolder.device(), dstFolder.directory(), newName);
+ 			BEntry entry(&newRef);
+ 			if (strcmp(oldName, fPathLeft.Leaf()) == 0) {
+ 				fPathLeft.SetTo(&entry);
+@@ -351,8 +348,7 @@
+ 		{
+ 			node_ref nref;
+ 
+-			if (message->FindInt32("device", &nref.device) != B_OK
+-				|| message->FindInt64("node", &nref.node) != B_OK)
++			if (message->FindNodeRef("virtual:node", &nref) != B_OK)
+ 				break;
+ 
+ 			_AskFileRemoved(nref);
+@@ -360,16 +356,17 @@
+ 
+ 		case B_DEVICE_UNMOUNTED:
+ 		{
+-			node_ref nref;
++			uint64 device = 0;
+ 
+-			if (message->FindInt32("device", &nref.device) != B_OK)
++			if (message->FindUInt64("device", &device) != B_OK)
+ 				break;
+ 
+-			if (nref.device == fLeftNodeRef.device && nref.device == fRightNodeRef.device)
++			if ((dev_t)device == fLeftNodeRef.device()
++				&& (dev_t)device == fRightNodeRef.device())
+ 				_AskDeviceRemoved(BOTH);
+-			else if (nref.device == fLeftNodeRef.device)
++			else if ((dev_t)device == fLeftNodeRef.device())
+ 				_AskDeviceRemoved(LEFT);
+-			else if (nref.device == fRightNodeRef.device)
++			else if ((dev_t)device == fRightNodeRef.device())
+ 				_AskDeviceRemoved(RIGHT);
+ 		} break;
+ 	}
+--- a/source/TextFileFilter.cpp
++++ b/source/TextFileFilter.cpp
+@@ -51,7 +51,7 @@
+ 
+ 	// allow all, if volume doesn't know MIME
+ 	BVolume volume;
+-	volume.SetTo((ref->device));
++	volume.SetTo(ref->device());
+ 	if (volume.KnowsMime() == false)
+ 		return true;
+ 

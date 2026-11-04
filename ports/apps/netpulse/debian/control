@@ -1,0 +1,16 @@
+Source: netpulse
+Section: net
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/NetPulse
+
+Package: netpulse
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: network activity tray monitor for V\OS
+ NetPulse is a small Deskbar tray item showing current network
+ activity (input/output rate) for the selected interface, with a
+ statistics window and interface switching from the context menu.

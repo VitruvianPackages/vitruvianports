@@ -1,0 +1,50 @@
+Description: Add a top-level Makefile-Engine project file
+ Upstream's sources/makefile hardwires the legacy layout: it includes
+ the engine from an absolute legacy path, installs into a legacy home
+ directory and drops the target beside the sources. This top-level file
+ restates the project for a build from the tree root next to debian/
+ with the engine reached through the DEVEL_DIRECTORY the buildsystem
+ passes, and adds -fPIC, which the packaged Makefile-Engine does not
+ add for shared targets. Upstream's sources/makefile is left as
+ shipped and is not used.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,35 @@
++## Top-level Makefile-Engine project file for the V\OS packaging build.
++## Upstream ships its project file as sources/makefile, hardwired to the
++## legacy layout (absolute engine path, install into a legacy home
++## directory, target beside the sources); this file restates the project
++## for a build from the source tree root, next to debian/.
++##
++## Copyright 2026, Dario Casalinuovo. All rights reserved.
++
++NAME = Open\ Target\ Folder-T
++TYPE = SHARED
++APP_MIME_SIG =
++
++SRCS = sources/opentargetfolder.cpp
++
++RDEFS =
++RSRCS = sources/opentargetfolder.rsrc
++
++LIBS = be
++LIBPATHS =
++SYSTEM_INCLUDE_PATHS =
++LOCAL_INCLUDE_PATHS =
++
++OPTIMIZE =
++WARNINGS =
++DEBUGGER =
++DEFINES =
++COMPILER_FLAGS = -fPIC
++LINKER_FLAGS =
++
++APP_VERSION :=
++
++## Include the Makefile-Engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

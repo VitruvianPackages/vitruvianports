@@ -1,0 +1,54 @@
+Description: Add a top-level Makefile-Engine project file
+ Upstream ships a hand-written legacy Makefile with its own compiler
+ and link rules, xres/mimeset/copyattr steps, which the Makefile-
+ Engine cannot drive (it would not even be recognised as an engine
+ project). This file states the same project for the engine: the
+ sources under source/ qualified from the tree root, TYPE=SHARED so
+ Tracker's load_add_on can map the image and resolve process_refs, and
+ COMPILER_FLAGS=-fPIC because the packaged engine does not add it for
+ shared targets. Resources are recompiled from ReName.rdef instead of
+ embedding the shipped pre-built .rsrc.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,38 @@
++## Top-level Makefile-Engine project file for the V\OS packaging build.
++## Upstream ships a hand-written legacy Makefile of its own (custom
++## compiler and link rules plus resource and MIME steps) which the
++## Makefile-Engine cannot drive; this file states the same project for
++## the engine, with the sources under source/ qualified from the tree
++## root where debian/ lives.
++##
++## Copyright 2026, Dario Casalinuovo. All rights reserved.
++
++NAME = ReName
++TYPE = SHARED
++APP_MIME_SIG =
++
++SRCS = source/driver.cpp source/Application.cpp source/AppWindow.cpp \
++	source/DragDropView.cpp source/FileName.cpp source/List.cpp \
++	source/RenameView.cpp
++
++RDEFS = source/ReName.rdef
++RSRCS =
++
++LIBS = be root $(STDCPPLIBS)
++LIBPATHS =
++SYSTEM_INCLUDE_PATHS =
++LOCAL_INCLUDE_PATHS =
++
++OPTIMIZE =
++WARNINGS =
++DEBUGGER =
++DEFINES =
++COMPILER_FLAGS = -fPIC
++LINKER_FLAGS =
++
++APP_VERSION :=
++
++## Include the Makefile-Engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

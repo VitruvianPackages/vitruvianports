@@ -1,0 +1,17 @@
+Source: vos-calendar
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libsqlite3-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Calendar
+
+Package: vos-calendar
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: month and day calendar application for V\OS
+ Calendar is a month/day calendar application with event and category
+ management, notifications, iCalendar import and an optional remote
+ event sync. Events live in a local SQLite database; the first day of
+ the week follows the locale rules from the localisation kit.

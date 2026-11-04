@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=Haiku2048
+GenericName=2048 puzzle
+Comment=Slide numbered tiles to reach the 2048 tile
+Exec=/system/apps/Haiku2048
+Icon=Haiku2048
+Terminal=false
+StartupNotify=true
+Categories=Game;LogicGame;
+MimeType=application/x-vnd.Haiku-Haiku2048;

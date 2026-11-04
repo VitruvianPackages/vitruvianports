@@ -1,0 +1,42 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: BePDF
+Source: https://github.com/HaikuArchives/BePDF
+
+Files: *
+Copyright: 1997 Benoit Triquet
+           1998-2000 Hubert Figuiere
+           2000-2011 Michael Pfeiffer
+           2013-2016 waddlesplash
+           2013-2018 Augustin Cavalier
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ On Debian systems, the full text of the GNU General Public License
+ version 2 can be found in /usr/share/common-licenses/GPL-2.
+
+Files: xpdf/*
+Copyright: 1996-2017 Glyph & Cog, LLC
+License: GPL-2 | GPL-3
+ The bundled xpdf-derived sources are distributed under GPL version 2
+ or version 3, and explicitly not under "any later version"; see
+ xpdf/README, xpdf/COPYING (GPL v2) and xpdf/COPYING3 (GPL v3).
+ .
+ On Debian systems, the full texts of the GNU General Public Licenses
+ version 2 and 3 can be found in /usr/share/common-licenses/GPL-2 and
+ /usr/share/common-licenses/GPL-3.
+
+Files: Makefile voscompat/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: GPL-2+
+ This packaging glue is part of this program and is distributed under
+ the same terms as the program itself: GNU GPL version 2 or later.
+ .
+ On Debian systems, the full text of the GNU General Public License
+ version 2 can be found in /usr/share/common-licenses/GPL-2.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: GPL-2+

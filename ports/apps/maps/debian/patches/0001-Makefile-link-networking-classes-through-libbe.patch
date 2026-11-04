@@ -1,0 +1,27 @@
+Description: link the networking classes through libbe, add Debian tinyxml
+ On V\OS the net kit, the netservices stack and ColumnListView are all
+ compiled into libbe (nm -D libbe.so shows BUrlRequest, NetEndpoint,
+ BNetworkRoster and 115 ColumnListView symbols) and no package ships
+ libbnetapi, libnetservices, libnetwork or libcolumnlistview, so the
+ original LIBS line dies with "cannot find -lbnetapi" (and the rest).
+ Dropping those four entries keeps every symbol resolving through the
+ libbe that is already linked. tinyxml stays: it comes from Debian's
+ libtinyxml-dev, which upstream's #include <tinyxml.h> and the TiXml
+ calls in src/SearchForm.cpp need. The trailing m comes from the link
+ error on sqrtf (MapsView.cpp): Debian's ld does not take libm
+ transitively through libbe's own NEEDED, so libm has to be named.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Maps
+
+--- a/Makefile
++++ b/Makefile
+@@ -63,7 +63,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = $(STDCPPLIBS) be bnetapi netservices shared translation tracker network columnlistview tinyxml
++LIBS = $(STDCPPLIBS) be shared translation tracker tinyxml m
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

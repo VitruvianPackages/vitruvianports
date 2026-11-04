@@ -1,0 +1,23 @@
+Description: replace the removed private brightness helper
+ The legacy tree's BPrivate::perceptual_brightness() does not exist in
+ the V\OS private interface headers, so the call cannot compile. Use an
+ equivalent fixed-point BT.601 luminance computation inline; it only
+ picks the stroke/text color for the workspace number on the desktop
+ background.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/View.cpp
++++ b/View.cpp
+@@ -79,7 +79,10 @@
+ 	FillEllipse(rect);
+ 
+ 	// determine color for stroke / number string
+-	int brightness = BPrivate::perceptual_brightness(bgColor);
++	// (fixed-point luminance; the private perceptual helper of the
++	// legacy tree has no counterpart here)
++	int brightness = (38139 * bgColor.red + 30195 * bgColor.green
++		+ 11703 * bgColor.blue) >> 16;
+ 	if (brightness > 127)
+ 		SetHighColor(16, 16, 16);
+ 	else

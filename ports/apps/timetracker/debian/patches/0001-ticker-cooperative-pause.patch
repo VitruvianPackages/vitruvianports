@@ -1,0 +1,81 @@
+Description: pause the ticker cooperatively instead of suspend_thread
+ The window froze its ticker thread with suspend_thread() while the
+ task-entry card was shown ("Time doesn't go when I add a new task"); on
+ VOS suspend_thread() has no per-thread form (B_NOT_SUPPORTED). Replace
+ the suspend/resume pairs with a shared gTickerPaused flag: the window
+ sets it when the card opens and clears it on cancel/OK, and the ticker
+ loop skips its one-second tick while it is set. The thread is still
+ spawned and resumed once at window construction and is never killed
+ (matching upstream, which relies on team teardown).
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/TimeTracker
+--- a/src/Defines.h
++++ b/src/Defines.h
+@@ -19,4 +19,8 @@
+ #define BUTTON_NEW_TASK_OK			3000
+ #define BUTTON_NEW_TASK_CANCEL		3001
+ 
++// Set by the window while the task-entry card is shown; the ticker thread
++// skips its second instead of being suspend_thread()ed (not usable on VOS).
++extern volatile bool gTickerPaused;
++
+ #endif
+--- a/src/TimeTicker.cpp
++++ b/src/TimeTicker.cpp
+@@ -10,6 +10,7 @@
+ 
+ #include <stdio.h>
+ 
++#include "Defines.h"
+ #include "TaskListItem.h"
+ 
+ int32
+@@ -20,6 +21,8 @@
+ 	while (true)
+ 	{
+ 		snooze(1000000);
++		if (gTickerPaused)
++			continue;
+ 		for(int i = 0; i<ListView->CountItems(); i++)
+ 		{
+ 			TaskListItem* temp = (TaskListItem*)ListView->ItemAt(i);
+--- a/src/TimeTrackerWindow.cpp
++++ b/src/TimeTrackerWindow.cpp
+@@ -17,6 +17,8 @@
+ extern	int32 Function(void* Data);
+ extern	BMessage ApplicationPreferences;
+ 
++volatile bool gTickerPaused = false;
++
+ 
+ TimeTrackerWindow::TimeTrackerWindow(BRect Frame)
+ 	:
+@@ -92,7 +94,8 @@
+ 	{	
+ 		m_TaskMenu->SetEnabled(false);
+ 		m_Frame = Bounds();
+-		suspend_thread(m_Thread);	//Time doesn't go when I add a new task
++		gTickerPaused = true;	//Time doesn't go when I add a new task
++		// (instead of suspend_thread, which has no per-thread form on VOS)
+ 		m_CardLayout->SetVisibleItem((int32)1);
+ 		InvalidateLayout();
+ 		break;
+@@ -107,7 +110,7 @@
+ 		m_CardLayout->SetVisibleItem((int32)0);
+ 		InvalidateLayout();
+ 		ResizeTo(m_Frame.Width(), m_Frame.Height());
+-		resume_thread(m_Thread);	//Okay back to work ;)
++		gTickerPaused = false;	//Okay back to work ;)
+ 		m_TaskMenu->SetEnabled(true);
+ 		break;
+ 	}
+@@ -138,7 +141,7 @@
+ 			m_ListView->AddItem(new TaskListItem(TaskName)); //Hey a new task. DOH!
+ 			InvalidateLayout();
+ 			ResizeTo(m_Frame.Width(), m_Frame.Height());
+-			resume_thread(m_Thread);	//Okay back to work ;)
++			gTickerPaused = false;	//Okay back to work ;)
+ 			m_TaskMenu->SetEnabled(true);
+ 			break;
+ 		}

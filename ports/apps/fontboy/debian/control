@@ -1,0 +1,15 @@
+Source: fontboy
+Section: fonts
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/FontBoy
+
+Package: fontboy
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: font browsing and preview application
+ FontBoy is a font previewer: it lists the installed typefaces, shows
+ character sets and sample pages, and renders single glyphs.

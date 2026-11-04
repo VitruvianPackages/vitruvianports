@@ -1,0 +1,4 @@
+0001-socket-posix-adaptation.patch
+0002-ftpclient-cooperative-stop.patch
+0003-makefile-drop-unshipped-libs.patch
+0004-remoteview-float-include.patch

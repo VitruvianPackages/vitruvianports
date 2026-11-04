@@ -1,0 +1,71 @@
+Description: Add a top-level Makefile-Engine project file
+ The upstream project file lives in source/ and names its sources
+ relative to that directory, so it cannot drive a build from the source
+ tree root where debian/ lives. This top-level file restates the project
+ with qualified paths plus the port deltas: TYPE=SHARED, because Tracker
+ loads add-ons with load_add_on (dlopen) and only a shared object
+ exports process_refs for get_image_symbol, with COMPILER_FLAGS=-fPIC
+ because the packaged Makefile-Engine does not add -fPIC itself for
+ shared targets; and the Tracker add-on header directory on the include
+ path, because vos.specs does not provide it (<TrackerAddOn.h> would not
+ resolve). Upstream's source/Makefile is left as shipped; upstream's
+ dual-mode self-launch of the stand-alone window from process_refs()
+ cannot survive on this platform (glibc refuses to dlopen a
+ position-independent executable and a shared object cannot be
+ executed) and is recorded as a porting note instead.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,50 @@
++## Top-level Makefile-Engine project file for the V\OS packaging build.
++## Upstream ships its project file as source/Makefile with paths relative to
++## that directory; this file restates it with qualified paths so the build can
++## run from the source tree root, where debian/ lives.
++##
++## Copyright 2026, Dario Casalinuovo. All rights reserved.
++
++# The name of the binary.
++NAME = TrackerGrep-G
++
++# The type of binary, must be one of:
++#	APP:	Application
++#	SHARED:	Shared library or add-on
++#	STATIC:	Static library archive
++#	DRIVER: Kernel driver
++# Tracker dlopens this image and calls process_refs(), so it is a shared
++# object like every other Tracker add-on; process_refs() additionally
++# launching the same file as a stand-alone application is not possible on
++# this platform (see debian/patches/0001).
++TYPE = SHARED
++
++# If you plan to use localization, specify the application's MIME signature.
++APP_MIME_SIG =
++
++SRCS = source/GrepApp.cpp source/GrepListView.cpp source/Grepper.cpp \
++	source/GrepWindow.cpp source/Model.cpp source/TrackerGrep.cpp
++
++RDEFS = source/TrackerGrep.rdef
++RSRCS =
++
++LIBS = be tracker textencoding $(STDCPPLIBS)
++LIBPATHS =
++
++SYSTEM_INCLUDE_PATHS = /system/develop/headers/os/add-ons/tracker
++LOCAL_INCLUDE_PATHS =
++
++OPTIMIZE := FULL
++
++WARNINGS =
++DEBUGGER =
++DEFINES =
++COMPILER_FLAGS = -fPIC
++LINKER_FLAGS =
++
++APP_VERSION :=
++
++## Include the Makefile-Engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

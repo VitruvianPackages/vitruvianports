@@ -1,0 +1,16 @@
+Source: bedc
+Section: net
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BeDC
+
+Package: bedc
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Direct Connect client for V\OS
+ BDirectConnect is a chat-oriented Direct Connect client: connect to a hub,
+ join channels, talk to other users and browse shared directories, with
+ link statistics and message wrapping in the channel view.

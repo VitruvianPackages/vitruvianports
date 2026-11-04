@@ -1,0 +1,16 @@
+Source: artpaint
+Section: graphics
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, zlib1g-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/ArtPaint
+
+Package: artpaint
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: layered raster painting and image-manipulation app for VitruvianOS
+ ArtPaint is a painting and image-processing program with layers,
+ selections, a brush store, text tools and 27 add-on image filters.
+ It imports and exports through the translation kit.

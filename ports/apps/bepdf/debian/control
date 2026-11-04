@@ -1,0 +1,17 @@
+Source: bepdf
+Section: graphics
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libfreetype-dev, pkgconf
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/BePDF
+
+Package: bepdf
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: PDF viewer for V\OS
+ BePDF is a PDF viewer with bookmarks, full-text search, annotations and
+ user-defined bookmarking for unencrypted PDF documents. Pages render
+ with FreeType, printing goes through the base print path, and the
+ bundled xpdf-derived engine parses PDF up to version 1.7.

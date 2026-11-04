@@ -1,0 +1,24 @@
+Description: include the sound helper from its media2 path
+ The legacy media helper header shipped at the top level of the old media
+ kit include tree. V\OS media2 ships the same play_sound() API at
+ media2/PlaySound.h -- the path the media2 kit's own sources use -- so
+ the bare <PlaySound.h> include does not resolve on V\OS.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-21
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+---
+--- a/Application/BeTrisApp.cpp
++++ b/Application/BeTrisApp.cpp
+@@ -25,7 +25,7 @@
+ #include <TranslationUtils.h>
+ #include <stdlib.h>
+ #include <time.h>
+-#include <PlaySound.h>
++#include <media2/PlaySound.h>
+ #include <Entry.h>
+ 
+ const char		*BETRIS_TETRINET_V114	= "1.14";

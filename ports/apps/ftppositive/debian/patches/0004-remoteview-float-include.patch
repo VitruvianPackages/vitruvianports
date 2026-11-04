@@ -1,0 +1,15 @@
+Description: include float.h for FLT_MAX
+ RemoteFileView.cpp uses FLT_MAX without including <float.h>; it only
+ compiled on legacy systems through a transitive include. Add the
+ standard header.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/FtpPositive
+--- a/src/RemoteFileView.cpp
++++ b/src/RemoteFileView.cpp
+@@ -1,4 +1,5 @@
+ #include <stdio.h>
++#include <float.h>
+ #include <strings.h>
+ 
+ #include <Messenger.h>

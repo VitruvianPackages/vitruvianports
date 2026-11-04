@@ -1,0 +1,15 @@
+Source: ftppositive
+Section: net
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/FtpPositive
+
+Package: ftppositive
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: FTP client
+ FtpPositive is an FTP client with a remote file browser, bookmarks and
+ queued transfers.

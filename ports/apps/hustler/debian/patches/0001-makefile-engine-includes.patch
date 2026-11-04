@@ -1,0 +1,20 @@
+Description: remove the stray conflict markers from the engine include
+ The main makefile's engine include block had leftover leading '+'
+ characters on both lines (make stopped with "missing separator" at
+ Source/Hustler/makefile:114). Drop them; the block now matches the
+ standard findpaths/DEVEL_DIRECTORY form and can be overridden from the
+ command line (DEVEL_DIRECTORY=/).
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hustler
+--- a/Source/Hustler/makefile
++++ b/Source/Hustler/makefile
+@@ -110,6 +110,6 @@
+ 
+ ## include the makefile-engine
+ DEVEL_DIRECTORY := \
+-+	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
+-+include $(DEVEL_DIRECTORY)/etc/makefile-engine
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine
+ 

@@ -1,0 +1,33 @@
+Description: link media2 and libbe's ColumnListView, not media and columnlistview
+ V\OS ships the media kit as libmedia2.so (the media2 headers keep the
+ legacy file and class names), so -lmedia fails at link time; and
+ ColumnListView lives inside libbe (src/kits/interface/ColumnListView.cpp),
+ no libcolumnlistview.so exists anywhere, so -lcolumnlistview fails too.
+ The application and the BeEncoder add-on both lose 'media' in favour of
+ 'media2', and the application loses 'columnlistview'.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- a/Makefile_Hare
++++ b/Makefile_Hare
+@@ -62,7 +62,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = $(STDCPPLIBS) hare tag be game media tracker columnlistview
++LIBS = $(STDCPPLIBS) hare tag be game media2 tracker
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative
+--- a/src/Encoders/BeEncoder/Makefile
++++ b/src/Encoders/BeEncoder/Makefile
+@@ -57,7 +57,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = hare tag be media
++LIBS = hare tag be media2
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

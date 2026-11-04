@@ -1,0 +1,16 @@
+Source: haiku2048
+Section: games
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Haiku2048
+
+Package: haiku2048
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: 2048 puzzle game
+ The 2048 sliding-tile puzzle game: slide numbered tiles on a 4x4 grid,
+ merging equal numbers to reach the 2048 tile, with highscores and
+ localized UI.

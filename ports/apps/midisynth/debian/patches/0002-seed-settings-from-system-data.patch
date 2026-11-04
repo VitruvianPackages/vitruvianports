@@ -1,0 +1,64 @@
+Description: seed the user's key maps and chords from the system data
+ The app reads its key maps and chord list from the settings folder,
+ where nothing is installed, so the first launch failed to open the
+ default key map. The package ships them under /system/data/midisynth;
+ copy what is missing into the settings folder on startup.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/src/Application.cpp
++++ b/src/Application.cpp
+@@ -43,6 +43,45 @@
+ 
+ static const char settingsFolder[] = "MidiSynth";
+ static const char settingsFilename[] = "MidiSynth";
++static const char kSystemData[] = "/system/data/midisynth";
++
++
++// Copy the shipped key maps and chords into the user's settings on first run.
++static void
++SeedSettings(const BPath& settings)
++{
++	BPath mapsPath(settings.Path(), "KeyMappings");
++	BPath chords(settings.Path(), "Chords");
++	if (create_directory(mapsPath.Path(), 0755) != B_OK)
++		return;
++
++	BDirectory maps(BPath(kSystemData, "KeyMappings").Path());
++	BEntry entry;
++	BDirectory userMaps(mapsPath.Path());
++	while (maps.GetNextEntry(&entry) == B_OK) {
++		char name[B_FILE_NAME_LENGTH];
++		entry.GetName(name);
++		if (BEntry(&userMaps, name).Exists())
++			continue;
++		BFile in(&entry, B_READ_ONLY);
++		BFile out(&userMaps, name, B_WRITE_ONLY | B_CREATE_FILE);
++		char buffer[4096];
++		ssize_t size;
++		while (in.InitCheck() == B_OK && out.InitCheck() == B_OK
++			&& (size = in.Read(buffer, sizeof(buffer))) > 0)
++			out.Write(buffer, size);
++	}
++
++	if (!BEntry(chords.Path()).Exists()) {
++		BFile in(BPath(kSystemData, "Chords").Path(), B_READ_ONLY);
++		BFile out(chords.Path(), B_WRITE_ONLY | B_CREATE_FILE);
++		char buffer[4096];
++		ssize_t size;
++		while (in.InitCheck() == B_OK && out.InitCheck() == B_OK
++			&& (size = in.Read(buffer, sizeof(buffer))) > 0)
++			out.Write(buffer, size);
++	}
++}
+ 
+ static char const* instruments[128] = {
+ 	// Pianos (0-7)
+@@ -184,6 +223,7 @@
+ 	BPath path;
+ 	if (find_directory(B_USER_SETTINGS_DIRECTORY, &path) == B_OK) {
+ 		path.Append(settingsFolder);
++		SeedSettings(path);
+ 		BDirectory dir(path.Path());
+ 		if (B_OK != keyMapDir.SetTo(&dir, "KeyMappings"))
+ 			keyMapDir = dir;

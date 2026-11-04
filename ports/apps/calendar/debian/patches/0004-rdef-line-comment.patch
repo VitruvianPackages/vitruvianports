@@ -1,0 +1,20 @@
+Description: use a grammar-supported line comment in the rdef
+ The resource definition carried a hash line comment (## ...). The
+ platform rc lexer only accepts /* ... */ and // comments, so the file
+ stopped at a syntax error on that line. The comment text is unchanged.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+diff --git a/src/calendar.rdef b/src/calendar.rdef
+index 6fba723..ad63877 100644
+--- a/src/calendar.rdef
++++ b/src/calendar.rdef
+@@ -37,7 +37,7 @@ resource(1, "ADD_EVENT") #'VICN' array {
+ 	$"842204"
+ };
+ 
+-## Temporary Placeholder Toolbar Icon
++// Temporary Placeholder Toolbar Icon
+ 
+ resource(2, "CALENDAR_ICON") #'VICN' array {
+ 	$"6E6369660404006603000080020006020000003C6000C000000000004C000048"

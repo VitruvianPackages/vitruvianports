@@ -1,0 +1,23 @@
+Description: Makefile: link libm explicitly for Debian's ld
+ IconMenuItem.cpp calls ceilf. On the legacy system libm rides libroot or
+ libbe transitively, but Debian's ld does not resolve it that way:
+ "obj/IconMenuItem.o: undefined reference to symbol 'ceilf@@GLIBC_2.2.5' /
+ /lib/x86_64-linux-gnu/libm.so.6: error adding symbols: DSO missing from
+ command line" (observed in this container's build), so list m in LIBS.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/Makefile
++++ b/Makefile
+@@ -63,7 +63,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS =   be shared localestub tracker translation icuuc icui18n $(STDCPPLIBS)
++LIBS =   be shared localestub tracker translation icuuc icui18n m $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

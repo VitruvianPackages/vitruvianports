@@ -1,0 +1,15 @@
+Source: vos-rename
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/ReName
+
+Package: vos-rename
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: batch-rename Tracker add-on for V\OS
+ ReName adds a right-click Tracker action that opens a window to
+ batch-rename the selected files with pattern rules.

@@ -1,0 +1,18 @@
+Source: textworker
+Section: editors
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libicu-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/dospuntos/TextWorker
+
+Package: textworker
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: text transformation editor for V\OS
+ TextWorker is a lightweight native text editor: edit text and apply
+ transformations to it — case conversion (upper, lower, title), line
+ sorting, trimming, prefix/suffix edits, find & replace with
+ case-sensitivity and whole-word options, plus an undo history.
+ Find and replace live in the sidebar.

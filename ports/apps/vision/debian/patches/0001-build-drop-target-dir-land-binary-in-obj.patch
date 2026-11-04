@@ -1,0 +1,21 @@
+Description: build: drop TARGET_DIR so the binary lands in the object
+ directory
+ The upstream Makefile sets TARGET_DIR = ../dist, so the engine writes
+ the binary outside obj/. The packaging buildsystem installs the app
+ from obj/$(NAME), and the engine default for TARGET_DIR is already
+ OBJ_DIR, so the assignment is dropped rather than carried.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: own
+
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -6,7 +6,7 @@
+ 
+ # The name of the binary.
+ NAME = Vision
+-TARGET_DIR = ../dist
++# VOS: binary lands in OBJ_DIR (the packaging install step reads obj/$(NAME))
+ 
+ # The type of binary, must be one of:
+ #	APP:	Application

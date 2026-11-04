@@ -1,0 +1,24 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: USBDeskbar
+Source: https://github.com/HaikuArchives/USBDeskbar
+
+Files: *
+Copyright: Vincent Cedric (CKJ) and the USBDeskbar contributors
+License: GPL
+ Upstream source headers state "This code is the property of Vincent
+ Cedric / You can't copy or use this code without according of the
+ author (GPL License)" and do not name a version; see those headers.
+
+Files: USBKit.h USBKit.cpp
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: GPL
+ The port's device-enumeration layer, written for the V\OS build of
+ this package on the same terms as the surrounding sources (see
+ debian/patches/0002).
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: GPL
+ Packaging files are under the same terms as the upstream sources.
+

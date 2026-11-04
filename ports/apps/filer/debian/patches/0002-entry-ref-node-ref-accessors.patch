@@ -1,0 +1,76 @@
+Description: adapt entry_ref/node_ref field access to the V\OS accessors
+ V\OS encapsulates entry_ref and node_ref: the legacy public fields
+ device/directory/node became accessor methods (device(), directory(),
+ node()) with set_to() to bind values, so poking fields - and taking their
+ addresses for BMessage::FindInt32/FindInt64 - no longer compiles. Read the
+ message values into locals and bind them with set_to(); message keys and
+ semantics are unchanged. The ref name member stays public, so name
+ handling is untouched.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: vendor, V\OS packaging
+--- a/FSUtils.cpp
++++ b/FSUtils.cpp
+@@ -58,7 +58,7 @@
+ 	off_t src_bytes;
+ 
+ 	dest->GetRef(&ref);
+-	BVolume dvolume(ref.device);
++	BVolume dvolume(ref.device());
+ 	src->GetSize(&src_bytes);
+ 
+ 	if (src_bytes > dvolume.FreeBytes())
+--- a/AutoFiler.cpp
++++ b/AutoFiler.cpp
+@@ -128,8 +128,11 @@
+ 			BString name;
+ 			entry_ref ref;
+ 			
+-			msg->FindInt32("device", &ref.device);
+-			msg->FindInt64("directory", &ref.directory);
++			int32 dev;
++			int64 dir;
++			msg->FindInt32("device", &dev);
++			msg->FindInt64("directory", &dir);
++			ref.set_to(dev, dir);
+ 			msg->FindString("name", &name);
+ 			ref.set_name(name.String());
+ 
+@@ -141,8 +144,11 @@
+ 			// We only care if we're monitoring the "to" directory because
+ 			// the Filer doesn't care about files that aren't there anymore
+ 			node_ref nref;
+-			msg->FindInt32("device", &nref.device);
+-			msg->FindInt64("to directory", &nref.node);
++			int32 dev;
++			int64 node;
++			msg->FindInt32("device", &dev);
++			msg->FindInt64("to directory", &node);
++			nref.set_to(dev, node);
+ 			
+ 			gRefLock.Lock();
+ 			
+@@ -164,8 +170,7 @@
+ 				BString name;
+ 				entry_ref ref;
+ 				msg->FindString("name", &name);
+-				ref.device = nref.device;
+-				ref.directory = nref.node;
++				ref.set_to(nref.device(), nref.node());
+ 				ref.set_name(name.String());
+ 
+ 				LaunchFiler(ref);
+@@ -176,8 +181,11 @@
+ 		case B_ATTR_CHANGED:
+ 		{
+ 			node_ref nref;
+-			msg->FindInt32("device", &nref.device);
+-			msg->FindInt64("node", &nref.node);
++			int32 dev;
++			int64 node;
++			msg->FindInt32("device", &dev);
++			msg->FindInt64("node", &node);
++			nref.set_to(dev, node);
+ 			
+ 			gRefLock.Lock();
+ 			

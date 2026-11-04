@@ -1,0 +1,16 @@
+Source: vision
+Section: net
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Vision
+
+Package: vision
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: IRC client with scripting and DCC for V\OS
+ Vision is a native IRC client with per-channel scripting, DCC file
+ transfers, multiple simultaneous server connections and message
+ logging.

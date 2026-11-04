@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=TextWorker
+GenericName=Text editor
+Comment=Edit text and apply transformations to it
+Exec=/system/apps/TextWorker
+Icon=TextWorker
+Terminal=false
+StartupNotify=true
+Categories=Utility;TextEditor;
+MimeType=application/x-vnd.jpw-TextWorker;

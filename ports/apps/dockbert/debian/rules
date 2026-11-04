@@ -1,0 +1,32 @@
+#!/usr/bin/make -f
+
+# Makefile is in source/; steer the engine from here.
+
+SIG := $(shell sed -n 's/^APP_MIME_SIG *= *//p' source/Makefile)
+LOCALES := $(shell sed -n 's/^LOCALES *= *//p' source/Makefile)
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure:
+	# engine makefile; nothing to configure
+
+override_dh_auto_build:
+	LINK_LIBS=-lroot $(MAKE) -C source DEVEL_DIRECTORY=/ MIMESET=true \
+		OBJ_DIR=obj -j$(shell nproc 2>/dev/null || echo 2)
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D source/obj/Dockbert \
+		$(CURDIR)/debian/dockbert/system/apps/Dockbert
+	# one .catalog per LOCALES entry
+	install -d $(CURDIR)/debian/dockbert/system/data/locale/catalogs/$(SIG)
+	for ck in source/locales/*.catkeys; do \
+		lang=$${ck##*/}; lang=$${lang%.catkeys}; \
+		case " $(LOCALES) " in *" $$lang "*) ;; *) continue ;; esac; \
+		linkcatkeys -o $(CURDIR)/debian/dockbert/system/data/locale/catalogs/$(SIG)/$$lang.catalog \
+			-s $(SIG) -l $$lang $$ck || exit 1; \
+	done
+	@echo "dockbert: catkeys files: $$(find . -name '*.catkeys' | wc -l), catalogs built: $$(find $(CURDIR)/debian/dockbert -name '*.catalog' | wc -l)"

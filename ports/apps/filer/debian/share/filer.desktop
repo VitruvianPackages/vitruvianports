@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=Filer
+GenericName=File organiser
+Comment=Apply user-defined rules to organise files
+Exec=/system/apps/Filer
+Icon=Filer
+Terminal=false
+StartupNotify=true
+Categories=Utility;FileManager;
+MimeType=application/x-vnd.dw-Filer;

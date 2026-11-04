@@ -1,0 +1,17 @@
+Source: maps
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libtinyxml-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Maps
+
+Package: maps
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: map viewer with place search for V\OS
+ Maps is a map viewer that fetches OpenStreetMap tiles over HTTPS and
+ searches places through a geocoding service, with results listed for
+ instant navigation. Window layout, zooming and scrolling are plain
+ V\OS interface kit controls.

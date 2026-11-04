@@ -1,0 +1,39 @@
+diff -ruN a/src/Vision.cpp b/src/Vision.cpp
+--- a/src/Vision.cpp	2026-11-07 12:47:12.326156381 +0100
++++ b/src/Vision.cpp	2026-11-07 12:47:12.346156460 +0100
+@@ -444,28 +444,15 @@
+ void
+ VisionApp::LoadInitialSettings()
+ {
+-	image_info info;
+-	int32 cookie = 0;
+-	while (get_next_image_info(B_CURRENT_TEAM, &cookie, &info) == B_OK) {
+-		if (info.type == B_APP_IMAGE) {
+-			BPath path(info.name);
+-			if (path.InitCheck() != B_OK)
+-				return;
++	BFile file("/system/data/Vision/InitialSettings", B_READ_ONLY);
++	if (file.InitCheck() != B_OK)
++		return;
+ 
+-			path.GetParent(&path);
+-			path.Append("InitialSettings");
+-			BFile file(path.Path(), B_READ_ONLY);
+-			if (file.InitCheck() != B_OK)
+-				return;
++	BMessage message;
++	if (message.Unflatten(&file) != B_OK)
++		return;
+ 
+-			BMessage message;
+-			if (message.Unflatten(&file) != B_OK)
+-				return;
+-
+-			fVisionSettings->Append(message);
+-			break;
+-		}
+-	}
++	fVisionSettings->Append(message);
+ }
+ 
+ void

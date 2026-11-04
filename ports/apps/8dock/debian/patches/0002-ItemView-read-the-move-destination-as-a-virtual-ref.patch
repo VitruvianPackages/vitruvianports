@@ -1,0 +1,37 @@
+Description: read the node-monitor move destination as a virtual ref
+ V\OS node-monitor messages do not carry the legacy integer fields:
+ the destination arrives as the entry_ref named "virtual:to directory"
+ (see kits/storage/PathMonitor.cpp, which sends exactly opcode + that
+ ref + virtual:from directory + virtual:node). Upstream's
+ FindInt32("device")/FindInt64("to directory") in EntryMoved therefore
+ always fail silently on V\OS and the dock item keeps a stale ref after
+ a file moves. FindRef on the sanctioned field name yields the whole
+ entry_ref (device, new parent directory and name) in one call, so the
+ manual set_name assembly goes away with it.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/8Dock
+
+--- a/src/ItemView.cpp
++++ b/src/ItemView.cpp
+@@ -406,13 +406,13 @@
+ 
+ void CItemView::EntryMoved( BMessage *msg )
+ {
+-	const char *name;
+-	
+-	msg->FindInt32( "device", &mRef.device ); 
+-	msg->FindInt64( "to directory", &mRef.directory );
+-	msg->FindString( "name", &name );
+-
+-	mRef.set_name( name );
++	// V\OS node-monitor messages carry the move destination as a ref:
++	// "virtual:to directory" is the entry_ref (device, new parent
++	// directory, name) itself. The legacy integer device/directory
++	// fields such messages no longer carry always fail to read, so take
++	// the whole ref instead of assembling it from parts.
++	if (msg->FindRef( "virtual:to directory", &mRef ) != B_OK)
++		return;
+ 
+ 	BEntry e( &mRef );
+ 	e.GetPath( &mPath );

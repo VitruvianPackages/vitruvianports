@@ -1,0 +1,30 @@
+Description: add a Makefile shim for the debhelper class
+ Upstream ships lower-case ./makefile, which GNU make finds happily, but
+ the vos_makefile_engine debhelper class resolves an explicit "Makefile"
+ in check_buildsystem and in _mkvars ("make -pn -f Makefile", the source
+ of NAME for the install step and of APP_MIME_SIG/LOCALES for the
+ catalog step). Without this file the compile succeeds and then
+ dh_auto_install dies with "Makefile-Engine: NAME is not set" while the
+ catalogs are silently skipped. GNU make prefers ./makefile over
+ ./Makefile, so the actual build still runs upstream's file; through
+ "-f Makefile" the include below yields the same definitions.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Tipster
+
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,13 @@
++# Debhelper build-system shim for the V\OS class-1 build.
++#
++# Upstream keeps its makefile in lower-case ./makefile (GNU make finds
++# it fine), but the vos_makefile_engine debhelper class reads and
++# queries an explicit "Makefile" (its check_buildsystem, its _mkvars
++# "make -pn -f Makefile" that yields NAME for the install step and the
++# APP_MIME_SIG/LOCALES for the catalog step). Without this file the
++# build compiles but dh_auto_install dies with "Makefile-Engine: NAME
++# is not set" and the catalogs are silently skipped. GNU make prefers
++# ./makefile over ./Makefile, so the engine build itself still runs
++# upstream's own file untouched; this shim is only ever read through
++# "-f Makefile", where the include below pulls the same definitions in.
++include makefile

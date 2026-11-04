@@ -1,0 +1,79 @@
+Description: stop the prefs thread cooperatively instead of kill_thread
+ The filter destructor killed its preference-watching thread with
+ kill_thread() (whole-team kill on VOS). The prefs loop had no quit
+ path at all; give it one: the destructor posts QUIT_PREFS_THREAD to
+ the prefs port (the port id is now kept in fPrefsPort), the loop
+ deletes the port and returns, and the destructor reaps the thread with
+ wait_for_thread().
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/KeyCursor
+--- a/src/KeyCursorFilter.cpp
++++ b/src/KeyCursorFilter.cpp
+@@ -42,6 +42,7 @@
+ {
+ 	fPortID = -1;
+ 	fPrefsThread = -1;
++	fPrefsPort = -1;
+ 	fNecessaryMods = fPrefs.GetToggleModMask();
+ 	fButtonPressed = 0;
+ 	fLeftPressed = false;
+@@ -90,8 +91,13 @@
+ 	if (_IsLivingInDeskbar())
+ 		_RemoveFromDeskbar();
+ 
+-	if (fPrefsThread != -1)
+-		kill_thread(fPrefsThread);
++	// Cooperative stop: kill_thread() would take the whole team on VOS.
++	// The prefs loop exits on QUIT_PREFS_THREAD; unblock it and reap.
++	thread_id tid = fPrefsThread;
++	if (fPrefsPort >= 0)
++		write_port(fPrefsPort, QUIT_PREFS_THREAD, NULL, 0);
++	if (tid != -1)
++		wait_for_thread(tid, NULL);
+ }
+ 
+ 
+@@ -346,6 +352,8 @@
+ 	if (updatePrefsPort < 0)
+ 		return updatePrefsPort;
+ 
++	((KeyCursorFilter*) cookie)->fPrefsPort = updatePrefsPort;
++
+ 	while (1) {
+ 		int32 msg_code;
+ 		status_t err = read_port(updatePrefsPort, &msg_code, NULL, 0);
+@@ -353,6 +361,11 @@
+ 			return err;
+ 
+ 		KeyCursorFilter* filter = (KeyCursorFilter*) cookie;
++		if (msg_code == QUIT_PREFS_THREAD) {
++			filter->fPrefsPort = -1;
++			delete_port(updatePrefsPort);
++			return B_OK;
++		}
+ 		if (msg_code == PREFS_CHANGED) {
+ 			filter->fPrefs.Update();
+ 			filter->fNecessaryMods = filter->fPrefs.GetToggleModMask();
+--- a/src/KeyCursor.h
++++ b/src/KeyCursor.h
+@@ -103,6 +103,7 @@
+ 			static int32	PrefsThreadFunc(void* cookie);
+ 
+ 			thread_id 		fPrefsThread;
++			port_id			fPrefsPort;
+ 
+ 			port_id			fPortID;
+ 
+--- a/src/Preferences.h
++++ b/src/Preferences.h
+@@ -18,6 +18,9 @@
+ // #define	ENABLED_CHANGED	'kcEC'
+ #define	ACCEL_CHANGED	'kcAC'
+ #define	PREFS_CHANGED	'kcPC'
++// posted to KEY_CURSOR_PREFS_PORT_NAME to end the prefs thread (VOS has
++// no per-thread kill).
++#define	QUIT_PREFS_THREAD	'kcQT'
+ 
+ #define STATE			'stat'
+ 

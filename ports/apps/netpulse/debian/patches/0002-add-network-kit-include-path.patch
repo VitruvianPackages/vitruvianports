@@ -1,0 +1,19 @@
+Description: add the V\OS network kit headers to the include path
+ The packaged /etc/vos.specs carries no -I entry for
+ /system/develop/headers/os/net, so bare includes of the network kit
+ headers (NetworkInterface.h, NetworkRoster.h) do not resolve with the
+ engine's default flags.  Point the engine at that directory.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -70,7 +70,7 @@
+ #	additional paths to look for system headers
+ #	thes use the form: #include <header>
+ #	source file directories are NOT auto-included here
+-SYSTEM_INCLUDE_PATHS =
++SYSTEM_INCLUDE_PATHS = /system/develop/headers/os/net
+ 
+ #	additional paths to look for local headers
+ #	thes use the form: #include "header"

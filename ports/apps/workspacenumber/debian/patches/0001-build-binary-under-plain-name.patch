@@ -1,0 +1,19 @@
+Description: build the binary under its plain name
+ The upstream makefile places the binary two directories up from the
+ makefile (NAME = ../../WorkspaceNumber), which is outside the build
+ tree and installs to a stray path. Build it as obj/WorkspaceNumber so
+ the buildsystem installs it to system/apps/WorkspaceNumber.
+Author: Dario Casalinuovo <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -8,7 +8,7 @@
+ ## file:///system/develop/documentation/makefile-engine.html
+ 
+ # The name of the binary.
+-NAME = ../../WorkspaceNumber
++NAME = WorkspaceNumber
+ 
+ # The type of binary, must be one of:
+ #	APP:	Application

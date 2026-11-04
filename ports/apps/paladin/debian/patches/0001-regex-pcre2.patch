@@ -1,0 +1,182 @@
+Description: regex helper: port to pcre2
+ The pcre3 development files are no longer shipped by the distrelease this
+ package builds against, so the regex helper moves to the pcre2 API with an
+ 8-bit code unit width, and the build links pcre2-8 instead of pcre.
+Author: VitruvianOS Ports <ports@vitruvian.invalid>
+Forwarded: no
+Origin: upstream https://github.com/HaikuArchives/Paladin @ 5b7c442bd68eb3e04ce2b5b780eb2314db3b977a
+
+--- a/Paladin/ThirdParty/CRegex.h
++++ b/Paladin/ThirdParty/CRegex.h
+@@ -8,7 +8,8 @@
+ 
+ #include <String.h>
+ #include <vector>
+-#include <pcre.h>
++#define PCRE2_CODE_UNIT_WIDTH 8
++#include <pcre2.h>
+ 
+ using std::vector;
+ 
+@@ -44,7 +45,8 @@
+ 
+ 		status_t fInitCheck;
+ 
+-		pcre* fRegex;
++		pcre2_code* fRegex;
++		pcre2_match_data* fMatchData;
+ 		BString fErrorStr;
+ 		bool fBackward;
+ 
+--- a/Paladin/ThirdParty/CRegex.cpp
++++ b/Paladin/ThirdParty/CRegex.cpp
+@@ -5,13 +5,14 @@
+ 
+ #include "CRegex.h"
+ 
+-const status_t krx_NoMatch = PCRE_ERROR_NOMATCH;
+-const status_t krx_NotBOL = PCRE_NOTBOL;
+-const status_t krx_NotEOL = PCRE_NOTEOL;
++const status_t krx_NoMatch = PCRE2_ERROR_NOMATCH;
++const status_t krx_NotBOL = PCRE2_NOTBOL;
++const status_t krx_NotEOL = PCRE2_NOTEOL;
+ 
+ CRegex::CRegex()
+ 	: fInitCheck(B_NO_INIT)
+ 	, fRegex(NULL)
++	, fMatchData(NULL)
+ 	, fErrorStr(NULL)
+ {
+ }
+@@ -20,6 +21,7 @@
+ 			   bool backward)
+ 	: fInitCheck(B_NO_INIT)
+ 	, fRegex(NULL)
++	, fMatchData(NULL)
+ 	, fErrorStr(NULL)
+ {
+ 	_Init(pattern, ignoreCase, fullWord, backward);
+@@ -44,23 +46,17 @@
+ 		return B_NO_INIT;
+ 	if (!subject)
+ 		return B_BAD_VALUE;
+-	int res;
+-	int infoCount;
+-	res = pcre_fullinfo(fRegex, NULL, PCRE_INFO_CAPTURECOUNT, &infoCount);
+-	if (res != 0)
+-		return res;
+-	infoCount++;
+-	int vs = infoCount*3;
+-	int *mvect = new int [vs];
+-	res = pcre_exec(fRegex, NULL, subject, len, offset, options, mvect, vs);
++	int res = pcre2_match(fRegex, (PCRE2_SPTR)subject, (PCRE2_SIZE)len,
++		(PCRE2_SIZE)offset, options, fMatchData, NULL);
+ 	fMatchInfos.clear();
+ 	if (res >= 0)
+ 	{
++		PCRE2_SIZE *ovector = pcre2_get_ovector_pointer(fMatchData);
+ 		for( int i=0; i<res; ++i)
+ 		{
+ 			MatchInfo mi;
+-			mi.start = mvect[i*2];
+-			mi.len = mvect[1+i*2]-mvect[i*2];
++			mi.start = (int)ovector[i*2];
++			mi.len = (int)(ovector[1+i*2]-ovector[i*2]);
+ 			if (i==1 && fBackward)
+ 			{	// [zooey]: we inserted a greedy anchor-to-front in order to
+ 				// match the last occurence of the pattern. Now we need to
+@@ -74,7 +70,6 @@
+ 		}
+ 		res = 0;
+ 	}
+-	delete [] mvect;
+ 	return res;
+ }
+ 
+@@ -159,9 +154,9 @@
+ 		fErrorStr = "Pattern is empty!";
+ 		return B_BAD_VALUE;
+ 	}
+-	uint32 options = PCRE_UTF8 | PCRE_MULTILINE;
++	uint32 options = PCRE2_UTF | PCRE2_MULTILINE;
+ 	if (ignoreCase)
+-		options |= PCRE_CASELESS;
++		options |= PCRE2_CASELESS;
+ 	BString pattern;
+ 	if (fullWord)
+ 		pattern << "\\b" << patt << "\\b";
+@@ -173,16 +168,23 @@
+ 		pattern = BString("(\\A(?s).*)") << pattern;
+ 		fBackward = true;
+ 	}
+-	const char* errStr;
+-	int errPos;
+-	fRegex = pcre_compile(pattern.String(), options, &errStr, &errPos, NULL);
++	int errCode;
++	PCRE2_SIZE errPos;
++	fRegex = pcre2_compile((PCRE2_SPTR)pattern.String(),
++		PCRE2_ZERO_TERMINATED, options, &errCode, &errPos, NULL);
+ 	if (!fRegex) 
+ 	{
+-		fErrorStr << errStr << " at:\n\t" << pattern.String()+errPos;
++		PCRE2_UCHAR errBuf[256];
++		pcre2_get_error_message(errCode, errBuf, sizeof(errBuf));
++		fErrorStr << (const char*)errBuf << " at:\n\t"
++			<< pattern.String()+errPos;
+ 		fInitCheck = B_ERROR;
+ 	}
+ 	else
++	{
++		fMatchData = pcre2_match_data_create_from_pattern(fRegex, NULL);
+ 		fInitCheck = B_OK;
++	}
+ 	return fInitCheck;
+ }
+ 
+@@ -190,9 +192,14 @@
+ {
+ 	if (fRegex)
+ 	{
+-		pcre_free(fRegex);
++		pcre2_code_free(fRegex);
+ 		fRegex = NULL;
+ 	}
++	if (fMatchData)
++	{
++		pcre2_match_data_free(fMatchData);
++		fMatchData = NULL;
++	}
+ 	fErrorStr.Truncate(0);
+ 	fBackward = false;
+ 	fInitCheck = B_NO_INIT;
+--- a/Paladin/VRegWindow.cpp
++++ b/Paladin/VRegWindow.cpp
+@@ -102,7 +102,7 @@
+ 	CRegex regex(fRegexTextControl->Text(), false, false, false);
+ 	int32 startingPosition = 0;
+ 	status_t result = regex.Match(fSourceView->Text(), strlen(fSourceView->Text()),
+-		startingPosition, PCRE_NO_UTF8_CHECK);
++		startingPosition, PCRE2_NO_UTF_CHECK);
+ 
+ 	int32 resultCount = 0;
+ 	while (result == B_OK) {
+@@ -118,7 +118,7 @@
+ 		match << "\n";
+ 		fMatchView->Insert(match.String());
+ 		result = regex.Match(fSourceView->Text(), strlen(fSourceView->Text()),
+-			startingPosition, PCRE_NO_UTF8_CHECK);
++			startingPosition, PCRE2_NO_UTF_CHECK);
+ 
+ 		resultCount++;
+ 	}
+--- a/Paladin/Makefile
++++ b/Paladin/Makefile
+@@ -133,7 +133,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS =  be tracker pcre translation localestub $(STDCPPLIBS)
++LIBS =  be tracker pcre2-8 translation localestub $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

@@ -1,0 +1,16 @@
+Source: hustler
+Section: misc
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Hustler
+
+Package: hustler
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: musical deskbar companion
+ Hustler sits in the deskbar and plays music through player add-ons
+ (a SoundPlay add-on ships here). The CDDA add-on of the upstream tree is
+ not part of this package.

@@ -1,0 +1,11 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Shredder
+Source: https://github.com/HaikuArchives/Shredder
+
+Files: *
+Copyright: the Shredder authors
+License: other
+ The upstream repository ships no licence file, and neither its README
+ nor its sources carry a licence statement or copyright headers; no
+ permission to use, modify or redistribute beyond the default copyright
+ grant is granted by the upstream.

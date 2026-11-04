@@ -1,0 +1,16 @@
+Source: armyknife
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libtag1-dev, libmusicbrainz5-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/ArmyKnife
+
+Package: armyknife
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: audio tag editor and MusicBrainz client for V\OS
+ ArmyKnife tags audio files (ID3, Vorbis, FLAC and friends via TagLib),
+ reads and writes the tag attributes of a folder of tracks, and resolves
+ release data against MusicBrainz.

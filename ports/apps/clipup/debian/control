@@ -1,0 +1,16 @@
+Source: clipup
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/ClipUp
+
+Package: clipup
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: clipboard manager for V\OS
+ ClipUp watches the clipboard and keeps a history of clippings in a
+ floating menu, with optional input-server filter add-ons (including a
+ Ctrl-V watcher).

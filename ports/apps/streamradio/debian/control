@@ -1,0 +1,16 @@
+Source: streamradio
+Section: sound
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/StreamRadio
+
+Package: streamradio
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: internet radio player for V\OS
+ StreamRadio is an internet radio player with a station list: add
+ stations or playlist URLs, probe them for stream details, play them
+ and follow ICY metadata (now playing titles) while they stream.

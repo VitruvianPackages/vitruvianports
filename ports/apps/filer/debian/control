@@ -1,0 +1,17 @@
+Source: filer
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, libsqlite3-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Filer
+
+Package: filer
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: rule-based file organiser
+ Filer applies user-defined rules to files: move, copy, rename and tag
+ them by attribute and MIME type, matching on name patterns, file types
+ and attributes. Files are handed to Filer by dropping them on it or by
+ opening them with it.

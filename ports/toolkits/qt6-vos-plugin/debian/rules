@@ -1,0 +1,9 @@
+#!/usr/bin/make -f
+include /usr/share/dpkg/architecture.mk
+
+%:
+	dh $@ --with vos --buildsystem=qmake6 --sourcedirectory=src/platform
+
+override_dh_auto_install:
+	install -D -m 0644 src/platform/libqhaiku.so \
+		debian/qt6-vos-plugin/usr/lib/$(DEB_HOST_MULTIARCH)/qt6/plugins/platforms/libqhaiku.so

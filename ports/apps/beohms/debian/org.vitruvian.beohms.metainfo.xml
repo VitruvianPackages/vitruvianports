@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.vitruvian.beohms</id>
+  <name>BeOhms</name>
+  <summary>Ohmmeter and resistance calculator</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      BeOhms calculates resistance from colour bands and reads band colours from a resistance value; a small helper for electronics work.
+    </p>
+  </description>
+  <developer id="org.vitruvian"><name>The Vitruvian Project</name></developer>
+  <launchable type="desktop-id">org.vitruvian.beohms.desktop</launchable>
+  <categories>
+    <category>Utility</category>
+  </categories>
+  <content_rating type="oars-1.1"/>
+  <url type="homepage">https://v-os.dev</url>
+</component>

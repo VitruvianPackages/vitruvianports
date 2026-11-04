@@ -1,0 +1,18 @@
+Source: shredder
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Shredder
+
+Package: shredder
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: secure-delete Tracker add-on for V\OS
+ Shredder adds a right-click Tracker action that overwrites the
+ selected files repeatedly (up to 24 passes) before deleting them. The
+ overwrite is plain data rewriting: on a journalled filesystem it is
+ best-effort, since the filesystem and the device may still keep old
+ blocks.

@@ -1,0 +1,56 @@
+Description: Rebuild the environment correctly and report tray availability from the helper's presence.
+Author: Vladislav Janeček <38503981+schotek@users.noreply.github.com>
+Origin: vendor
+Forwarded: no
+---
+ src/platform/qhaikuintegration.cpp  | 15 ++++++++++++---
+ src/platform/qhaikusystemtrayicon.h |  6 +++++-
+ 2 files changed, 17 insertions(+), 4 deletions(-)
+
+diff --git a/src/platform/qhaikuintegration.cpp b/src/platform/qhaikuintegration.cpp
+index dc21d2b..af54be8 100644
+--- a/src/platform/qhaikuintegration.cpp
++++ b/src/platform/qhaikuintegration.cpp
+@@ -209,10 +209,19 @@ QHaikuIntegration *QHaikuIntegration::createHaikuIntegration(const QStringList&
+ 			}
+ 		}
+ 
+-		// Rebuild environment arrays
++		// Rebuild environment arrays. setenv() copies name and value;
++		// putenv() would store a pointer into the QByteArray temporary and
++		// leave environ full of dangling entries, so HOME reads back empty
++		// and QStandardPaths resolves everything under "/".
+ 		clearenv();
+-		for ( const auto& envValue : envList )
+-			putenv(envValue.toUtf8().data());
++		for ( const auto& envValue : envList ) {
++			const QByteArray entry = envValue.toUtf8();
++			const int eq = entry.indexOf('=');
++			if (eq <= 0)
++				continue;
++			setenv(entry.left(eq).constData(),
++				entry.mid(eq + 1).constData(), 1);
++		}
+ 	}
+ 
+ 	// Enable software rendering for QML
+diff --git a/src/platform/qhaikusystemtrayicon.h b/src/platform/qhaikusystemtrayicon.h
+index 37b86c5..e5eb3d1 100644
+--- a/src/platform/qhaikusystemtrayicon.h
++++ b/src/platform/qhaikusystemtrayicon.h
+@@ -92,7 +92,11 @@ public:
+     void showMessage(const QString &title, const QString &msg,
+                      const QIcon &icon, MessageIcon iconType, int msecs) override;
+ 
+-    bool isSystemTrayAvailable() const override { return true; }
++    // Answer honestly: the tray is driven by the external /bin/qsystray
++    // helper (see README). Claiming a tray that cannot appear makes an
++    // application hide itself into nothing.
++    bool isSystemTrayAvailable() const override
++        { return QFileInfo("/bin/qsystray").isFile(); }
+     bool supportsMessages() const override { return true; }
+ 
+     bool 	findTrayExecutable(void);
+-- 
+2.47.3
+

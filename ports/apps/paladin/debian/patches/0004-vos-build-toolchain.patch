@@ -1,0 +1,179 @@
+Description: build projects with the V\OS layout and flag set
+ Project loading, platform detection and the command builders still
+ assumed the legacy tree. This maps the project-file tokens onto the V\OS
+ header and library locations, reports the modern-gcc platform flavour for
+ this system, passes the system compiler flag set (/etc/vos.specs - the
+ same file the makefile-engine puts on CFLAGS) to every compile and
+ dependency scan so angle-included headers resolve, lists libroot when
+ linking (the dynamic linker here does not resolve it through the
+ interface kit library), and keeps /system header paths out of the
+ per-file dependency list. Two debug prints without format strings are
+ also made explicit so they survive the distribution's
+ format-security-as-error flag.
+Author: VitruvianOS Ports <ports@vitruvian.invalid>
+Forwarded: no
+Origin: upstream https://github.com/HaikuArchives/Paladin @ 5b7c442bd68eb3e04ce2b5b780eb2314db3b977a
+
+--- a/Paladin/Project.cpp
++++ b/Paladin/Project.cpp
+@@ -127,7 +127,7 @@
+ 	entry_ref ref;
+ 	entry.GetRef(&ref);
+ 
+-	fReadOnly = BVolume(ref.device).IsReadOnly();
++	fReadOnly = BVolume(ref.device()).IsReadOnly();
+ 
+ 	TextFile file(ref, B_READ_ONLY);
+ 	status = file.InitCheck();
+@@ -180,19 +180,19 @@
+ 			} else if (entry == "LOCALINCLUDE") {
+ 				if (value.FindFirst("B_FIND_PATH_DEVELOP_HEADERS_DIRECTORY") == 0)
+ 					value.ReplaceFirst("B_FIND_PATH_DEVELOP_HEADERS_DIRECTORY",
+-						BString("/boot/system/develop/headers"));
++						BString("/system/develop/headers"));
+ 				ProjectPath include(fPath.GetFolder(), value.String());
+ 				AddLocalInclude(include.Absolute().String());
+ 			} else if (entry == "SYSTEMINCLUDE") {
+ 				if (value.FindFirst("B_FIND_PATH_DEVELOP_HEADERS_DIRECTORY") == 0)
+ 					value.ReplaceFirst("B_FIND_PATH_DEVELOP_HEADERS_DIRECTORY",
+-						BString("/boot/system/develop/headers"));
++						BString("/system/develop/headers"));
+ 				AddSystemInclude(value.String());
+ 			} else if (entry == "LIBRARY") {
+ 				if (value.FindFirst("B_FIND_PATH_DEVELOP_LIB_DIRECTORY") == 0) {
+ 					if (actualPlatform == PLATFORM_HAIKU_GCC4) {
+ 						value.ReplaceFirst("B_FIND_PATH_DEVELOP_LIB_DIRECTORY",
+-							BString("/boot/system/develop/lib"));
++							BString("/lib"));
+ 					} else if (actualPlatform == PLATFORM_HAIKU) {
+ 						value.ReplaceFirst("B_FIND_PATH_DEVELOP_LIB_DIRECTORY",
+ 							BString("/boot/system/develop/lib/x86"));
+@@ -203,7 +203,7 @@
+ 				if (value.FindFirst("B_FIND_PATH_LIB_DIRECTORY") == 0) {
+ 					if (actualPlatform == PLATFORM_HAIKU_GCC4) {
+ 						value.ReplaceFirst("B_FIND_PATH_LIB_DIRECTORY",
+-							BString("/boot/system/lib"));
++							BString("/lib"));
+ 					} else if (actualPlatform == PLATFORM_HAIKU) {
+ 						value.ReplaceFirst("B_FIND_PATH_LIB_DIRECTORY",
+ 							BString("/boot/system/lib/x86"));
+@@ -370,6 +370,9 @@
+ 		replacePath = "/boot/system/develop/headers";
+ 		if (include.FindFirst(replacePath) == 0)
+ 			include.ReplaceFirst(replacePath,"B_FIND_PATH_DEVELOP_HEADERS_DIRECTORY");
++		replacePath = "/system/develop/headers";
++		if (include.FindFirst(replacePath) == 0)
++			include.ReplaceFirst(replacePath,"B_FIND_PATH_DEVELOP_HEADERS_DIRECTORY");
+ 
+ 		data << "SYSTEMINCLUDE=" << include << "\n";
+ 	}
+@@ -434,6 +437,10 @@
+ 		if (strpath.FindFirst(replacePath) == 0)
+ 			strpath.ReplaceFirst(replacePath,"B_FIND_PATH_LIB_DIRECTORY");
+ 
++		replacePath = "/lib/";
++		if (strpath.FindFirst(replacePath) == 0)
++			strpath.ReplaceFirst(replacePath,"B_FIND_PATH_DEVELOP_LIB_DIRECTORY/");
++
+ 		data << "LIBRARY=" << strpath.String() << "\n";
+ 	}
+ 
+@@ -776,6 +783,11 @@
+ 		fBuildInfo.includeString << " -I '" << newItem->Absolute() << "'";
+ 	}
+ 
++	// V\OS: append the system include set the compiler driver uses on this
++	// system (the same file the makefile-engine puts on CFLAGS) so that
++	// angle-included headers resolve regardless of the project's own -I list.
++	fBuildInfo.includeString << " `cat /etc/vos.specs`";
++
+ 	fBuildInfo.errorList.msglist.MakeEmpty();
+ }
+ 
+@@ -840,6 +852,10 @@
+ 		compileString << "-I '" << item.String() << "' ";
+ 	}
+ 
++	// V\OS: same system include set as above; without it, <App.h>-style
++	// includes only exist behind /etc/vos.specs.
++	compileString << " `cat /etc/vos.specs` ";
++
+ 	//DPath projfolder(GetPath().GetFolder());
+ 	
+ 	CompileCommand cc(
+@@ -921,6 +937,10 @@
+ 			
+ 			linkString << "-l" << filenamebase << " ";
+ 		}
++
++		// V\OS: the dynamic linker here does not resolve libroot's symbols
++		// through libbe, so list it the way the system build rules do.
++		linkString << "-lroot ";
+ 		
+ 		if (fExtraLinkerOptions.CountChars() > 0)
+ 			linkString << fExtraLinkerOptions << " ";
+@@ -1560,7 +1580,8 @@
+ 				newproj->AddLibrary("/boot/system/develop/lib/x86/libbe.so",true);
+ 				//newproj->AddLibrary("/boot/system/lib/x86/libsupc++.so",true);
+ 			} else if (DetectPlatform() == PLATFORM_HAIKU_GCC4){
+-				newproj->AddLibrary("/boot/system/develop/lib/libbe.so",true);
++				// V\OS keeps the interface kit library in /lib.
++				newproj->AddLibrary("/lib/libbe.so",true);
+ 				//newproj->AddLibrary("/boot/system/lib/libsupc++.so",true);
+ 			}
+ 			else newproj->AddLibrary("/boot/develop/lib/x86/libbe.so",true);
+@@ -1844,6 +1865,13 @@
+ 		libpath.Append("libsupc++.so");
+ 		type =  BEntry(libpath.Path()).Exists() ? PLATFORM_HAIKU_GCC4 : PLATFORM_HAIKU;
+ 	}
++	else if (osname.FindFirst("GNU/Linux\n") == 0
++		|| osname.FindFirst("Linux\n") == 0)
++	{
++		// V\OS: report the modern-gcc project layout so the GCC4 branches
++		// resolve headers and libraries through the V\OS paths.
++		type = PLATFORM_HAIKU_GCC4;
++	}
+ 	else if (osname.FindFirst("Zeta\n") == 0)
+ 		type = PLATFORM_ZETA;
+ 	else
+--- a/Paladin/BuildSystem/SourceTypeC.cpp
++++ b/Paladin/BuildSystem/SourceTypeC.cpp
+@@ -267,7 +267,8 @@
+ 	std::vector<BString> included;
+ 	for (int32 si = components.CountStrings() - 1;si >=0;si--) {
+ 		if (!components.StringAt(si).EndsWith(".h") || 
+-			 components.StringAt(si).StartsWith("/boot/system/"))
++			 components.StringAt(si).StartsWith("/boot/system/") ||
++			 components.StringAt(si).StartsWith("/system/"))
+ 		{
+ 			components.Remove(si);
+ 		} else if(std::find(included.begin(), included.end(), 
+--- a/Paladin/PreviewFeatures/MonitorWindow.cpp
++++ b/Paladin/PreviewFeatures/MonitorWindow.cpp
+@@ -171,10 +171,10 @@
+ 	{
+ 		MonitorViewInfo info = *iter;
+ 		printf("Testing view with name:-\n");
+-		printf(info.name);
++		printf("%s", info.name);
+ 		printf("\n");
+ 		printf("Against required name:-\n");
+-		printf(name);
++		printf("%s", name);
+ 		printf("\n");
+ 		if (0 == strcmp(info.name,name))
+ 		{
+--- a/Paladin/QuickFindWindow.cpp
++++ b/Paladin/QuickFindWindow.cpp
+@@ -598,9 +598,9 @@
+ 					}
+ 					textCaps[strlen(text)] = '\0';
+ 					STRACE(1,("Caps follows\n"));
+-					STRACE(1,(caps));
++					STRACE(1,("%s", caps));
+ 					STRACE(1,("Search text caps follows\n"));
+-					STRACE(1,(textCaps));
++					STRACE(1,("%s", textCaps));
+ 					if (idx > 0)
+ 					{
+ 						s = strstr(caps,textCaps); //std::toupper(text,loc)); B_BAD_CAST!?!

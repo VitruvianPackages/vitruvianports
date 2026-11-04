@@ -1,0 +1,19 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: do not run mimeset from the AddResources action
+Forwarded: not-needed
+Author: Numerio <b.vitruvio@gmail.com>
+Description:
+ mimeset stamps the filesystem mime attributes and needs a running
+ V\OS session; it cannot run while a package is built in a build
+ container, and its failure would fail every jam build. Resource
+ embedding through xres is unaffected, and the package ships a desktop
+ entry for menu integration.
+
+--- a/Jamrules
++++ b/Jamrules
+@@ -2,5 +2,4 @@
+ 
+ actions AddResources {
+ 	xres -o $(1) $(2)
+-	mimeset -f $(1)
+ }

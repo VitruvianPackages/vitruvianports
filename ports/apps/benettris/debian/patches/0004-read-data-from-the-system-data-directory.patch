@@ -1,0 +1,78 @@
+Description: read the sound data from /system/data/BeNetTris
+ The default data directory was Data/ next to the executable. V\OS installs
+ the sounds and bitmap under /system/data/BeNetTris, so use that as the
+ default; a path saved in the preferences still wins.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-11-07
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+diff -ruN a/Application/BeTrisApp.cpp b/Application/BeTrisApp.cpp
+--- a/Application/BeTrisApp.cpp	2026-11-07 14:08:39.018151978 +0100
++++ b/Application/BeTrisApp.cpp	2026-11-07 14:08:39.030152345 +0100
+@@ -682,9 +682,7 @@
+ 	entry_ref	sound_ref;
+ 	
+ 	// construire le chemin par defaut
+-	path = _appPath.Path();
+-	path.Append("/");
+-	path.Append(P_PATH_DATA);
++	path = P_DATA_DIR;
+ 
+ 	// charger l'image
+ 	path = _prefs->GetString(path,P_PATH_DATA);
+@@ -2317,9 +2315,7 @@
+ 	BView		*offView = NULL;
+ 	
+ 	// construire le chemin par defaut
+-	path = _appPath.Path();
+-	path.Append("/");
+-	path.Append(P_PATH_DATA);
++	path = P_DATA_DIR;
+ 	path.Append("/");
+ 	path.Append(P_FILE_BITMAP);
+ 
+diff -ruN a/Share/BeTrisConstants.h b/Share/BeTrisConstants.h
+--- a/Share/BeTrisConstants.h	2026-11-07 14:08:39.030152345 +0100
++++ b/Share/BeTrisConstants.h	2026-11-07 14:08:39.038152590 +0100
+@@ -16,6 +16,7 @@
+ #define		BETRIS_VERSION			"BeNetTris v0.4 Beta"
+ 
+ // constantes des preferences
++#define		P_DATA_DIR				"/system/data/BeNetTris"
+ #define		P_PATH_DATA				"Data"
+ #define		P_PATH_MUSICS			"Data"
+ #define		P_FILE_BITMAP			"TNETBLKS.bmp"
+diff -ruN a/Views/BeTrisSettingView.cpp b/Views/BeTrisSettingView.cpp
+--- a/Views/BeTrisSettingView.cpp	2026-11-07 14:08:39.022152100 +0100
++++ b/Views/BeTrisSettingView.cpp	2026-11-07 14:08:39.034152467 +0100
+@@ -541,25 +541,19 @@
+ 	appPath = g_BeTrisApp->ApplicationPath();
+ 	if(appPath!=NULL)
+ 	{
+-		path = appPath->Path();
+-		path.Append("/");
+-		path.Append(P_PATH_DATA);
++		path = P_DATA_DIR;
+ 
+ 		// charger le chemin des donnees
+ 		path = prefs->GetString(path,P_PATH_DATA);
+ 		_dataspath->SetText(path.String());	
+ 
+-		path = appPath->Path();
+-		path.Append("/");
+-		path.Append(P_PATH_MUSICS);
++		path = P_DATA_DIR;
+ 
+ 		// charger le chemin des musics
+ 		path = prefs->GetString(path,P_PATH_MUSICS);
+ 		_musicpath->SetText(path.String());	
+ 
+-		path = appPath->Path();
+-		path.Append("/");
+-		path.Append(P_PATH_DATA);
++		path = P_DATA_DIR;
+ 		path.Append("/");
+ 		path.Append(P_FILE_TETRINET);
+ 

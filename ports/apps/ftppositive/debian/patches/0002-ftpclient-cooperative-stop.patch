@@ -1,0 +1,28 @@
+Description: stop the FTP receiver thread cooperatively instead of kill_thread
+ The destructor called kill_thread() on the receiver thread, which on
+ V\OS kills the whole team instead of one thread. Disconnect() has
+ already closed the control socket and raised fAbort before that point,
+ so the receiver loop exits by itself: resume the thread first (it is
+ only resumed by Connect() on the normal path, and wait_for_thread()
+ would hang on a never-started thread) and then wait for it.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/FtpPositive
+--- a/src/FTPClient.cpp
++++ b/src/FTPClient.cpp
+@@ -51,7 +52,14 @@
+ TFTPClient::~TFTPClient()
+ {
+ 	this->Disconnect();
+-	if (fReceiverThreadID >= B_OK) kill_thread(fReceiverThreadID);
++	// No kill_thread(): it takes the whole team with it on VOS.
++	// Disconnect() has already raised fAbort and closed the socket, so
++	// the receiver loop exits by itself; resume first in case the thread
++	// was never started (Connect() does the normal resume).
++	if (fReceiverThreadID >= B_OK) {
++		resume_thread(fReceiverThreadID);
++		wait_for_thread(fReceiverThreadID, NULL);
++	}
+ 	delete fReplyBuff;
+ 	if (fSemID >= B_OK) delete_sem(fSemID);
+ }

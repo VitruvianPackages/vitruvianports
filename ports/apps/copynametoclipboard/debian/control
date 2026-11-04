@@ -1,0 +1,15 @@
+Source: copynametoclipboard
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/CopyNameToClipboard
+
+Package: copynametoclipboard
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: copy-name-to-clipboard Tracker add-on
+ CopyNameToClipboard adds a right-click Tracker action that puts the
+ names of the selected entries on the system clipboard.

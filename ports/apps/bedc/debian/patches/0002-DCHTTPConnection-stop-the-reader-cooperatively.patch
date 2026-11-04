@@ -1,0 +1,52 @@
+Description: DCHTTPConnection: stop the reader cooperatively, no kill_thread
+ kill_thread() tears down the whole team on V\OS, and the HTTP receiver is
+ blocked in recv(); killing it would take the app with it. Take the ids
+ first, unblock the reader with shutdown() before close() (a plain close()
+ does not wake a blocked recv on Linux), and reap it with wait_for_thread(),
+ skipping the wait when the reader calls this itself (self-wait would hang).
+ This is the cooperative stop the V\OS porting rules prescribe for
+ upstream kill_thread() uses; the only one in the tree is this call site.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/source/DCHTTPConnection.cpp
++++ b/source/DCHTTPConnection.cpp
+@@ -70,20 +70,26 @@
+ void
+ DCHTTPConnection::Disconnect()
+ {
+-	if (fThreadID >= 0)
+-	{
+-		kill_thread(fThreadID);
+-		fThreadID = -1;
+-	}
+-	if (fSocket >= 0)
++	// V\OS: kill_thread() tears down the whole team, so stop cooperatively.
++	// Take the ids first (the reader only wakes up after the shutdown below,
++	// so it cannot re-enter with a live thread id), unblock its recv() with
++	// shutdown(), close the socket, then reap it. The reader calls this too;
++	// never wait for the calling thread itself.
++	thread_id thread = fThreadID;
++	fThreadID = -1;
++	int32 socket = fSocket;
++	fSocket = -1;
++	if (socket >= 0)
+ 	{
+ #ifdef NETSERVER_BUILD
+-		closesocket(fSocket);
++		closesocket(socket);
+ #else
+-		close(fSocket);
++		shutdown(socket, SHUT_RDWR);
++		close(socket);
+ #endif
+-		fSocket = -1;
+ 	}
++	if (thread >= 0 && thread != find_thread(NULL))
++		wait_for_thread(thread, NULL);
+ }
+ 
+ void

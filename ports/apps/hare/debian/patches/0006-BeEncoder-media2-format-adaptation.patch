@@ -1,0 +1,62 @@
+Description: adapt BeEncoder to the media2 track and format API
+ media2 keeps BMediaFile/BMediaTrack and the legacy names, but the track
+ format calls take BMediaFormat (a wrapper whose public media_format member
+ is assigned in and out) instead of media_format*, and media_file_format
+ knows only B_KNOWS_RAW_VIDEO/B_KNOWS_RAW_AUDIO/B_KNOWS_OTHER - there is no
+ B_KNOWS_ENCODED_VIDEO to test. The three track calls now round-trip
+ through a BMediaFormat, and the encoder menu filter keeps the raw-video
+ test alone (the encoded-video test could never compile; on V\OS the
+ format list comes from the GStreamer-backed media_file_format enumeration
+ where video-remux containers simply do not carry a raw-video capability).
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- a/src/Encoders/BeEncoder/BeEncoder.cpp
++++ b/src/Encoders/BeEncoder/BeEncoder.cpp
+@@ -136,11 +136,14 @@
+ 			return B_ERROR;
+ 		}
+ 
+-		if (inputTrack->EncodedFormat(&infmt) != B_OK) {
++		BMediaFormat encodedFormat;
++		encodedFormat.format = infmt;
++		if (inputTrack->EncodedFormat(&encodedFormat) != B_OK) {
+ 			message->AddString("error",
+ 							   "Error getting encoded fromat from inputTrack.\n");
+ 			return B_ERROR;
+ 		}
++		infmt = encodedFormat.format;
+ 
+ 		if (!infmt.IsAudio()) {
+ 			inputFile.ReleaseTrack(inputTrack);
+@@ -160,11 +163,17 @@
+ 	memset(&infmt, 0, sizeof(media_format));
+ 	memset(&outfmt, 0, sizeof(media_format));
+ 
+-	inputTrack->EncodedFormat(&infmt);
++	BMediaFormat trackFormat;
++	trackFormat.format = infmt;
++	inputTrack->EncodedFormat(&trackFormat);
++	infmt = trackFormat.format;
+ 	outfmt.type = B_MEDIA_RAW_AUDIO;
+ 	outfmt.u.raw_audio.format = media_raw_audio_format::B_AUDIO_UCHAR;
+ 	outfmt.u.raw_audio.channel_count = 1;
+-	inputTrack->DecodedFormat(&outfmt);
++	BMediaFormat decodedFormat;
++	decodedFormat.format = outfmt;
++	inputTrack->DecodedFormat(&decodedFormat);
++	outfmt = decodedFormat.format;
+ 
+ 	char* sound_buffer = new char[outfmt.u.raw_audio.buffer_size];
+ 
+@@ -287,8 +296,7 @@
+ 
+ 	int32 format_cookie = 0;
+ 	while (get_next_file_format(&format_cookie, &mff) == B_OK) {
+-		if (!(mff.capabilities & media_file_format::B_KNOWS_RAW_VIDEO) &&
+-				!(mff.capabilities & media_file_format::B_KNOWS_ENCODED_VIDEO)) {
++		if (!(mff.capabilities & media_file_format::B_KNOWS_RAW_VIDEO)) {
+ 			int32 encoder_cookie = 0;
+ 			while (get_next_encoder(&encoder_cookie, &mff, &infmt, &outfmt, &mci)
+ 					== B_OK) {

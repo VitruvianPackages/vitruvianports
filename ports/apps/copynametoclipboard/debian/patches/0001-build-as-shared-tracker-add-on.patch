@@ -1,0 +1,29 @@
+Description: Build the add-on as a shared object
+ Tracker resolves process_refs() out of the image's dynamic symbol
+ table, which only a shared object provides; upstream's TYPE=APP would
+ have produced an executable Tracker cannot load. The packaged
+ Makefile-Engine adds no -fPIC for shared targets, so COMPILER_FLAGS
+ gains it as well.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: upstream
+--- a/makefile
++++ b/makefile
+@@ -14,7 +14,7 @@
+ #	SHARED:	Shared library or add-on
+ #	STATIC:	Static library archive
+ #	DRIVER: Kernel Driver
+-TYPE= APP
++TYPE= SHARED
+ 
+ # 	if you plan to use localization features 
+ # 	specify the application MIME siganture
+@@ -122,7 +122,7 @@
+ DEBUGGER = 
+ 
+ #	specify additional compiler flags for all files
+-COMPILER_FLAGS =
++COMPILER_FLAGS = -fPIC
+ 
+ #	specify additional linker flags
+ LINKER_FLAGS =

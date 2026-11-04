@@ -1,0 +1,39 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: MidiSynth
+Source: https://github.com/HaikuArchives/MidiSynth
+
+Files: *
+Copyright: 1999 Michael Pfeiffer
+           2000-2021 the MidiSynth authors (as listed by the app's About window:
+           Michael Pfeiffer, Dan Walton, Pete Goodeve, Humdinger)
+           2013-2015 Pete Goodeve, Humdinger and other contributors
+           2023 Nexus6 <nexus6.haiku@icloud.com>
+           1991-2000 Be Incorporated (icon code credited in
+           src/IconMenuItem.h)
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 2 dated June 1991.
+ .
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ General Public License for more details.
+ .
+ The complete, unmodified license text ships verbatim as the upstream
+ LICENSE file; it is also available in /usr/share/common-licenses/GPL-2
+ from the common-licenses package.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 2 dated June 1991.
+ .
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ General Public License for more details.
+ .
+ The complete license text is in /usr/share/common-licenses/GPL-2.

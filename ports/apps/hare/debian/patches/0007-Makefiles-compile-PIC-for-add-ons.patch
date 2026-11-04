@@ -1,0 +1,80 @@
+Description: compile the static library and add-ons as position
+ independent code
+ The packaged makefile-engine adds -shared for TYPE=SHARED but never -fPIC,
+ and x86-64 rejects non-PIC code in shared objects outright
+ ("relocation R_X86_64_PC32 ... recompile with -fPIC"), so no add-on can
+ link on V\OS amd64 as upstream ships its flags. The static library has to
+ be PIC too because all five add-ons link it in. COMPILER_FLAGS is the
+ makefile's own knob for additional compiler flags, so the six Makefiles
+ that build shared or PIC objects get -fPIC there; the application Makefile
+ is left alone.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Hare
+
+--- a/Makefile_libHare
++++ b/Makefile_libHare
+@@ -110,7 +110,7 @@
+ DEBUGGER := TRUE
+ 
+ #	Specify any additional compiler flags to be used.
+-COMPILER_FLAGS = 
++COMPILER_FLAGS = -fPIC
+ 
+ #	Specify any additional linker flags to be used.
+ LINKER_FLAGS = 
+--- a/src/Encoders/BeEncoder/Makefile
++++ b/src/Encoders/BeEncoder/Makefile
+@@ -107,7 +107,7 @@
+ DEBUGGER := 
+ 
+ #	Specify any additional compiler flags to be used.
+-COMPILER_FLAGS = 
++COMPILER_FLAGS = -fPIC
+ 
+ #	Specify any additional linker flags to be used.
+ LINKER_FLAGS = 
+--- a/src/Encoders/M3UCreator/Makefile
++++ b/src/Encoders/M3UCreator/Makefile
+@@ -106,7 +106,7 @@
+ DEBUGGER := 
+ 
+ #	Specify any additional compiler flags to be used.
+-COMPILER_FLAGS = 
++COMPILER_FLAGS = -fPIC
+ 
+ #	Specify any additional linker flags to be used.
+ LINKER_FLAGS = 
+--- a/src/Encoders/MP3GoGo/Makefile
++++ b/src/Encoders/MP3GoGo/Makefile
+@@ -106,7 +106,7 @@
+ DEBUGGER := 
+ 
+ #	Specify any additional compiler flags to be used.
+-COMPILER_FLAGS = 
++COMPILER_FLAGS = -fPIC
+ 
+ #	Specify any additional linker flags to be used.
+ LINKER_FLAGS = 
+--- a/src/Encoders/MP3Lame/Makefile
++++ b/src/Encoders/MP3Lame/Makefile
+@@ -106,7 +106,7 @@
+ DEBUGGER := 
+ 
+ #	Specify any additional compiler flags to be used.
+-COMPILER_FLAGS = 
++COMPILER_FLAGS = -fPIC
+ 
+ #	Specify any additional linker flags to be used.
+ LINKER_FLAGS = 
+--- a/src/Encoders/OGGEncoder/Makefile
++++ b/src/Encoders/OGGEncoder/Makefile
+@@ -106,7 +106,7 @@
+ DEBUGGER := 
+ 
+ #	Specify any additional compiler flags to be used.
+-COMPILER_FLAGS = 
++COMPILER_FLAGS = -fPIC
+ 
+ #	Specify any additional linker flags to be used.
+ LINKER_FLAGS = 

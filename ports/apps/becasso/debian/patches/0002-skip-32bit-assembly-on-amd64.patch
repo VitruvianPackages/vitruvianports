@@ -1,0 +1,23 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: skip the 32-bit assembly sources on amd64
+Forwarded: not-needed
+Description:
+ The 64-bit probe keys off a /system/kernel_x86_64 marker file that
+ V\OS does not ship, so the i386-only mmx_gcc.asm and
+ Colorcurves_x86.asm were pulled into amd64 builds; nasm -f elf32
+ objects cannot link into a 64-bit image. mmx.c already provides the
+ x86_64 fallbacks and ColorCurves.cpp guards its gamma_x86 path with
+ __INTEL__, so the assembly is dead code here.
+Author: Numerio <b.vitruvio@gmail.com>
+
+--- a/source/add-ons/ColorCurves/Jamfile
++++ b/source/add-ons/ColorCurves/Jamfile
+@@ -7,7 +7,7 @@
+ AS = nasm -f elf32 ;
+ 
+ local have64bits = [ GLOB /system : kernel_x86_64 ] ;
+-x86_sources = 	Colorcurves_x86.asm ;
++x86_sources = ;	# Colorcurves_x86.asm is 32-bit only; ColorCurves.cpp has the fallback
+ if $(have64bits) {
+ 	x86_sources = ;
+ }

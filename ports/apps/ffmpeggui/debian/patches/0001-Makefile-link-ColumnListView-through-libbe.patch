@@ -1,0 +1,21 @@
+Description: link ColumnListView through libbe, no libcolumnlistview.so
+ On V\OS ColumnListView and ColumnTypes are compiled into libbe
+ (src/kits/interface/ColumnListView.cpp) and no libcolumnlistview.so is
+ shipped anywhere, so the link dies with "cannot find -lcolumnlistview".
+ Dropping the entry keeps the classes resolving through the libbe that is
+ already linked.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/ffmpegGUI
+
+--- a/Makefile
++++ b/Makefile
+@@ -67,7 +67,7 @@
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+ 
+-LIBS = be tracker localestub columnlistview translation $(STDCPPLIBS)
++LIBS = be tracker localestub translation $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

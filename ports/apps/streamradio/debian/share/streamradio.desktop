@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=StreamRadio
+GenericName=Internet Radio
+Comment=Internet radio player with a station list
+Exec=/system/apps/StreamRadio
+Icon=StreamRadio
+Terminal=false
+StartupNotify=true
+Categories=Audio;AudioVideo;Player;
+MimeType=application/x-vnd.Fishpond-StreamRadio;audio/x-mpegurl;audio/x-scpls;

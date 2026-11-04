@@ -1,0 +1,50 @@
+Description: stop TMessageRunner cooperatively instead of kill_thread
+ The animation timer thread was reaped with kill_thread() in the
+ destructor, which on VOS kills the whole team instead of one thread.
+ Set a quit flag the loop observes after its snooze and wait_for_thread()
+ the thread before freeing the message.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/DockBert
+--- a/source/PanelWindow.cpp
++++ b/source/PanelWindow.cpp
+@@ -520,14 +520,19 @@
+ TMessageRunner::TMessageRunner( BMessenger messenger, BMessage *message, bigtime_t interval, int count )
+ 	: fMessenger(messenger), fMessage(message), fInterval(interval), fCount(count)
+ {
++	fQuit = false;
+ 	fThreadID = spawn_thread( _thread_instance, "TMessageRunner", B_NORMAL_PRIORITY, this );
+ 	resume_thread( fThreadID );
+ }
+ 
+ TMessageRunner::~TMessageRunner()
+ {
++	// Cooperative stop: kill_thread() would take the whole team on VOS.
++	// The loop sees fQuit after its current snooze and returns, then the
++	// thread is reaped before the message is freed.
++	fQuit = true;
++	wait_for_thread( fThreadID, NULL );
+ 	lock.Lock();
+-	kill_thread(fThreadID);
+ 	delete fMessage;
+ }
+ 
+@@ -546,6 +551,8 @@
+ 	while ( fCount == -1 || fCount > 0 )
+ 	{
+ 		snooze( fInterval );
++		if ( fQuit )
++			return;
+ 		lock.Lock();
+ 		fMessenger.SendMessage( fMessage );
+ 		lock.Unlock();
+--- a/source/PanelWindow.h
++++ b/source/PanelWindow.h
+@@ -66,6 +66,7 @@
+ 	bigtime_t fInterval;
+ 	int fCount;
+ 	thread_id fThreadID;
++	volatile bool fQuit;
+ 	BLocker lock;
+ };
+ 

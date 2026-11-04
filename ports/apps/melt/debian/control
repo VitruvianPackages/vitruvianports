@@ -1,0 +1,16 @@
+Source: vos-melt
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/Melt
+
+Package: vos-melt
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: CD burning frontend for V\OS
+ Melt is a graphical frontend that drives cdrecord for audio and data
+ disc projects (with a virtual CD list and blinker feedback for supported
+ burners).

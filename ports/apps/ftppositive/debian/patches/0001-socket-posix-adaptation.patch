@@ -1,0 +1,130 @@
+Description: adapt the socket code to POSIX (no sin_len, no SO_NONBLOCK)
+ V\OS follows the POSIX/Linux socket API: struct sockaddr_in has no
+ sin_len member (that is a legacy BSD field), and setsockopt has no
+ SO_NONBLOCK option (legacy systems carried it; POSIX flips a socket
+ with fcntl(O_NONBLOCK) instead). Drop the two sin_len assignments and
+ rewrite the blocking-mode switches with fcntl, keeping the original
+ semantics (wouldBlock = true selects the blocking mode).
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/FtpPositive
+--- a/src/FTPClient.cpp
++++ b/src/FTPClient.cpp
+@@ -6,6 +6,7 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <unistd.h>
++#include <fcntl.h>
+ #include <sys/socket.h>
+ #include <sys/select.h>
+ #include <sys/types.h>
+@@ -72,7 +80,6 @@
+ 	
+ 	struct sockaddr_in addr;
+ 	memset(&addr, 0, sizeof(struct sockaddr_in));
+-	addr.sin_len = sizeof(struct sockaddr_in);
+ 	addr.sin_family = AF_INET;
+ 	addr.sin_port = htons(port);
+ 	
+@@ -137,21 +144,24 @@
+ 
+ status_t TFTPClient::SetBlockingMode(bool wouldBlock)
+ {
+-	int err, block;
+-	if (wouldBlock) {
+-		block = 0;
+-		if (setsockopt(fControlEndpoint, SOL_SOCKET, SO_NONBLOCK, &block, sizeof(block)) < 0) {
+-			err = errno;
+-			fStrError.SetTo(strerror(err));
+-			return err;
+-		}
+-	} else {
+-		block = 1;
+-		if (setsockopt(fControlEndpoint, SOL_SOCKET, SO_NONBLOCK, &block, sizeof(block)) < 0) {
+-			err = errno;
+-			fStrError.SetTo(strerror(err));
+-			return err;
+-		}
++	int err;
++	// VOS/POSIX has no SO_NONBLOCK setsockopt option; the portable way to
++	// flip a socket between blocking and non-blocking is fcntl(O_NONBLOCK).
++	// wouldBlock = true selects the blocking mode, as before.
++	int fl = fcntl(fControlEndpoint, F_GETFL, 0);
++	if (fl < 0) {
++		err = errno;
++		fStrError.SetTo(strerror(err));
++		return err;
++	}
++	if (wouldBlock)
++		fl &= ~O_NONBLOCK;
++	else
++		fl |= O_NONBLOCK;
++	if (fcntl(fControlEndpoint, F_SETFL, fl) < 0) {
++		err = errno;
++		fStrError.SetTo(strerror(err));
++		return err;
+ 	}
+ 	return B_OK;
+ }
+--- a/src/FTPLooper.cpp
++++ b/src/FTPLooper.cpp
+@@ -200,7 +200,6 @@
+ 	((uint8 *)&addr->sin_addr.s_addr)[3] = v[3];
+ 	((uint8 *)&addr->sin_port)[0] = v[4];
+ 	((uint8 *)&addr->sin_port)[1] = v[5];
+-	addr->sin_len = sizeof(struct sockaddr_in);
+ 	addr->sin_family = AF_INET;
+ 	
+ //	fprintf(stderr, " %d\n", 256 * v[4] + v[5]);
+--- a/src/TCPStream.cpp
++++ b/src/TCPStream.cpp
+@@ -1,5 +1,6 @@
+ #include <OS.h>
+ #include <string.h>
++#include <fcntl.h>
+ #include <sys/select.h>
+ #include "TCPStream.h"
+ 
+@@ -7,7 +8,6 @@
+ TTCPStream::TTCPStream(BDataIO *dataIO, struct sockaddr_in *addr,
+ 	bigtime_t waitTime, uint32 buffSize, tcp_stream_mode_t tcpStreamMode)
+ {
+-	int block;
+ 	fTransferredSize = 0;
+ 	fDataIO = dataIO;
+ 	fWaitTime = waitTime;
+@@ -27,10 +27,13 @@
+ 	
+ 	// 非ブロッキングモード
+ 	// non-blocking mode
+-	block = 1;
+-	if (setsockopt(fEndpoint, SOL_SOCKET, SO_NONBLOCK, &block, sizeof(block)) < 0) {
+-		fStatus = errno;
+-		return;
++	// VOS/POSIX has no SO_NONBLOCK setsockopt option: use fcntl.
++	{
++		int fl = fcntl(fEndpoint, F_GETFL, 0);
++		if (fl < 0 || fcntl(fEndpoint, F_SETFL, fl | O_NONBLOCK) < 0) {
++			fStatus = errno;
++			return;
++		}
+ 	}
+ 	
+ 	// 接続
+@@ -57,10 +60,12 @@
+ 		case TCP_STREAM_UPLOAD:
+ 			// ブロッキングモード
+ 			// blocking mode
+-			block = 0;
+-			if (setsockopt(fEndpoint, SOL_SOCKET, SO_NONBLOCK, &block, sizeof(block)) < 0) {
+-				fStatus = errno;
+-				return;
++			{
++				int fl = fcntl(fEndpoint, F_GETFL, 0);
++				if (fl < 0 || fcntl(fEndpoint, F_SETFL, fl & ~O_NONBLOCK) < 0) {
++					fStatus = errno;
++					return;
++				}
+ 			}
+ 			// 送信スレッド開始
+ 			// start sending thread

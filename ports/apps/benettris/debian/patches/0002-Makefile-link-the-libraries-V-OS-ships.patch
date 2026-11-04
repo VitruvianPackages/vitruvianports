@@ -1,0 +1,31 @@
+Description: Makefile: link the libraries V\OS ships
+ Upstream lists "media midi game network translation tracker debug" in
+ LIBS. V\OS ships none of -lmedia, -lmidi, -lnetwork and -ldebug: its
+ media kit is libmedia2.so (play_sound lives there), the legacy endpoint
+ network library was dropped in favour of POSIX sockets (which this app
+ already uses directly), and there is no midi or debugger kit library.
+ -lgame also goes: the app never calls the joystick kit. What stays: be
+ (kits), media2 (play_sound, replacing media), translation
+ (BTranslationUtils::GetBitmap) and tracker -- V\OS puts BFilePanel in
+ libtracker, and the link fails without it. -lroot is exported by the
+ vos_makefile_engine buildsystem class; STDCPPLIBS was already listed by
+ upstream.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-21
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+---
+--- a/Makefile
++++ b/Makefile
+@@ -72,7 +72,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS =  $(STDCPPLIBS) be media midi game network translation tracker debug
++LIBS =  $(STDCPPLIBS) be media2 translation tracker
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

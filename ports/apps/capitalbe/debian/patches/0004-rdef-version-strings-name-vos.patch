@@ -1,0 +1,20 @@
+Description: capitalbe.rdef: version resource names this product V\OS
+ The app_version short_info/long_info strings are UI text; packaged builds
+ must name V\OS, not the legacy OS the strings came from. rc stores a
+ literal backslash only when it is doubled inside the string.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+
+--- a/src/capitalbe.rdef
++++ b/src/capitalbe.rdef
+@@ -10,8 +10,8 @@
+ 	variety = B_APPV_FINAL,
+ 	internal = 0,
+ 
+-	short_info = "Finance application for Haiku",
+-	long_info = "A personal finance application for Haiku"
++	short_info = "Finance application for V\\OS",
++	long_info = "A personal finance application for V\\OS"
+ };
+ 
+ resource file_types message {

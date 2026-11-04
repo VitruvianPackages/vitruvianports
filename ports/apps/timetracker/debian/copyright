@@ -1,0 +1,32 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: TimeTracker
+Source: https://github.com/HaikuArchives/TimeTracker
+
+Files: *
+Copyright: 2007-2020 Michael Wulff Nielsen and Humdinger
+License: GPL-2
+Comment: the source headers state "Distributed under the terms of the GPL
+ license" without naming a version; GPL-2 is used here as the reference
+ text, on Debian systems in /usr/share/common-licenses/GPL-2.
+
+Files: debian/*
+Copyright: 2026, Dario Casalinuovo. All rights reserved.
+License: GPL-2
+Comment: packaging follows the licence of the packaged program.
+
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify it
+ under the terms of the GNU General Public License as published by the
+ Free Software Foundation; version 2 of the License.
+ .
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+ Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License along
+ with this program; if not, write to the Free Software Foundation, Inc.,
+ 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+ .
+ On Debian systems the full text can be found in
+ /usr/share/common-licenses/GPL-2.

@@ -1,0 +1,5 @@
+#!/usr/bin/make -f
+export VOS_ADDON_SUBDIR := Tracker
+
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine

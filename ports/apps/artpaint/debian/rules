@@ -1,0 +1,29 @@
+#!/usr/bin/make -f
+
+# The filter add-ons are separate projects the class does not build.
+ADDON_DIRS := $(patsubst addons/AddOns/%/Makefile,%,$(wildcard addons/AddOns/*/Makefile))
+
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine
+
+override_dh_auto_clean:
+	dh_auto_clean
+	for d in $(ADDON_DIRS); do \
+		$(MAKE) -C addons/AddOns/$$d OBJ_DIR=obj clean; \
+	done
+
+override_dh_auto_build:
+	dh_auto_build
+	for d in $(ADDON_DIRS); do \
+		LINK_LIBS="-lroot -lm" $(MAKE) -C addons/AddOns/$$d \
+			OBJ_DIR=obj COMPILER_FLAGS="-Werror -fPIC" \
+			-j$$(nproc) || exit 1; \
+	done
+
+override_dh_auto_install:
+	dh_auto_install
+	mkdir -p debian/artpaint/system/add-ons/ArtPaint
+	for d in $(ADDON_DIRS); do \
+		install -m 0644 addons/AddOns/$$d/obj/*.so \
+			debian/artpaint/system/add-ons/ArtPaint/; \
+	done

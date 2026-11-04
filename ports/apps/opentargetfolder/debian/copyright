@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Open Target Folder
+Source: https://github.com/HaikuArchives/OpenTargetFolder
+
+Files: *
+Copyright: 2003 pinc Software
+License: other
+ The upstream sources carry the line "Copyright (c) 2003 pinc Software.
+ All Rights Reserved." and ship no licence statement in the sources, the
+ README or anywhere else in the repository; no permission to use,
+ modify or redistribute beyond the default copyright grant is granted by
+ the upstream. The upstream README credits Axel Dörfler as the author.

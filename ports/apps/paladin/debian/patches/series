@@ -1,0 +1,7 @@
+0001-regex-pcre2.patch
+0002-brefilter-stat-beos.patch
+0003-fileutils-entry-ref.patch
+0004-vos-build-toolchain.patch
+0005-debugger-gdb.patch
+0006-templates-vos-makefile-engine.patch
+0007-data-from-system-and-settings.patch

@@ -1,0 +1,32 @@
+Description: make the creation-time predicate VOS-safe
+ pred_crtime reads stat_buf->st_crtime, which VOS's struct stat does not
+ carry; the in-tree ports guard the same member with #ifndef __VOS__
+ (src/kits/tracker/FSUtils.cpp:1480, src/kits/tracker/PoseView.cpp:3137).
+ Guard the predicate the same way so -crtime never matches there instead
+ of failing to compile.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/TraX
+--- a/FindLib/findlib/pred.c
++++ b/FindLib/findlib/pred.c
+@@ -397,6 +397,12 @@
+ struct stat *stat_buf ;
+ struct predicate *pred_ptr ;
+ {
++#ifdef __VOS__
++	/* VOS struct stat carries no st_crtime; the in-tree ports guard it
++	   the same way (src/kits/tracker/FSUtils.cpp). The predicate can
++	   never match there. */
++	return ( false ) ;
++#else
+ 	switch ( pred_ptr->args.info.kind )
+ 	{
+ 		case COMP_GT:
+@@ -415,6 +421,7 @@
+ 			break ;
+ 	}
+ 	return ( false ) ;
++#endif
+ }
+ 
+ boolean

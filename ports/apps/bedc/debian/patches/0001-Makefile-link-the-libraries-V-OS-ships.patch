@@ -1,0 +1,29 @@
+Description: Makefile: link the libraries V\OS ships
+ Upstream lists "network be tracker translation textencoding columnlistview"
+ in LIBS. V\OS ships no -lnetwork and no -lcolumnlistview: the legacy
+ endpoint network library was dropped in favour of POSIX sockets (the app is
+ built with BONE_BUILD and already uses socket()/recv() from libc), and
+ BColumnListView/BColumn live in libbe on V\OS (src/kits/interface/
+ ColumnListView.cpp is part of the interface kit), so those symbols resolve
+ through -lbe. What stays: be, tracker, translation, textencoding --
+ libnetwork's absence, libcolumnlistview's absence and the presence of the
+ other three were checked against the installed vos/vos-dev packages.
+ -lroot is exported by the vos_makefile_engine buildsystem class;
+ STDCPPLIBS was already listed by upstream.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-23
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+--- a/Makefile
++++ b/Makefile
+@@ -72,7 +72,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = network be tracker translation textencoding columnlistview $(STDCPPLIBS)
++LIBS = be tracker translation textencoding $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative

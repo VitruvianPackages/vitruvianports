@@ -1,0 +1,18 @@
+Source: pecorename
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/PecoRename
+
+Package: pecorename
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: batch file renamer for V\OS
+ PecoRename renames many files at once from a previewable list: search
+ and replace, insert/overwrite, numbering, upper/lower case, extensions,
+ dates and random patterns, with a conflict check and a report before
+ anything is applied. Files arrive by drag and drop or the Tracker
+ context menu.

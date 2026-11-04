@@ -1,0 +1,99 @@
+Description: add a source-root Makefile for the class-1 build
+ The debhelper class builds and installs in the source root and reads
+ obj/$(NAME) relative to it, but upstream keeps its Makefile under src/
+ (paths relative to src/). Without a root Makefile there is nothing to
+ build at the root at all. This root Makefile mirrors src/Makefile with
+ src/-prefixed paths; upstream's src/Makefile stays untouched for its
+ own "cd src && make" flow. Every setting (APP_MIME_SIG, RDEFS, LIBS,
+ LOCALES - empty as upstream has them) matches src/Makefile.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/8Dock
+
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,84 @@
++## V\OS class-1 build entry for 8Dock.
++
++# The debhelper class builds and installs from the source root (it
++# enforces in-source building), while upstream keeps its Makefile under
++# src/ with paths relative to it. This root Makefile mirrors src/Makefile
++# with src/-prefixed paths so the engine target (obj/$(NAME)) and the
++# class install step agree; upstream's src/Makefile stays untouched.
++
++# specify the name of the binary
++NAME = 8Dock
++
++# specify the type of binary
++TYPE = APP
++
++# specify the application MIME signature (upstream leaves it empty)
++APP_MIME_SIG =
++
++#	specify the source files to use
++SRCS = \
++	src/BuildNavMenu.cpp \
++	src/DockApp.cpp \
++	src/DockWindow.cpp \
++	src/HandleView.cpp \
++	src/ItemListView.cpp \
++	src/ItemView.cpp \
++	src/LTrackerMenu.cpp \
++	src/LTrackerMenuItem.cpp \
++	src/PanelView.cpp \
++	src/PrefMessage.cpp \
++	src/TrashView.cpp \
++	src/WindowView.cpp
++
++#	specify the resource definition files to use
++RDEFS = src/8Dock.rdef
++
++#	specify the resource files to use
++RSRCS =
++
++#	specify additional libraries to link against
++LIBS = be $(STDCPPLIBS)
++
++#	specify additional paths to directories following the libXXX scheme
++LIBPATHS =
++
++#	additional paths to look for system headers
++SYSTEM_INCLUDE_PATHS =
++
++#	additional paths to look for local headers
++LOCAL_INCLUDE_PATHS =
++
++#	specify the level of optimization
++OPTIMIZE :=
++
++#	specify the codes for languages you are going to support
++LOCALES =
++
++#	specify any preprocessor symbols to be defined
++DEFINES =
++
++#	specify the warning level
++WARNINGS =
++
++#	specify whether image symbols will be created
++SYMBOLS :=
++
++#	specify debug settings
++DEBUGGER :=
++
++#	specify additional compiler flags
++COMPILER_FLAGS =
++
++#	specify additional linker flags
++LINKER_FLAGS =
++
++#	specify the version of this particular item
++APP_VERSION =
++
++#	(only for TYPE == DRIVER)
++DRIVER_PATH =
++
++## Include the Makefile-Engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

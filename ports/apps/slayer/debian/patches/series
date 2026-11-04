@@ -1,0 +1,4 @@
+0001-drop-columnlistview-lib.patch
+0002-thread-actions-vos-semantics.patch
+0003-appinfo-null-guard.patch
+0004-removeitems-no-dangling-rows.patch

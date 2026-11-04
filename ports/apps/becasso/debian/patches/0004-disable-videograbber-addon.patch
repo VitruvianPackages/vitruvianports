@@ -1,0 +1,21 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: disable the VideoGrabber capture add-on
+Forwarded: not-needed
+Author: Numerio <b.vitruvio@gmail.com>
+Description:
+ VideoGrabber is written against the legacy media node consumer API
+ (BMediaRoster, BMediaConsumer, BufferGroup); media2 has no equivalent
+ roster or consumer contract, so the add-on cannot build here. Screen
+ capture is not part of the core editor and the remaining add-ons are
+ unaffected.
+
+--- a/source/add-ons/Jamfile
++++ b/source/add-ons/Jamfile
+@@ -26,6 +26,6 @@
+ SubInclude TOP source add-ons Solarize ;
+ SubInclude TOP source add-ons Tile ;
+ # SubInclude TOP source add-ons Translate ;
+-SubInclude TOP source add-ons VideoGrabber ;
++# SubInclude TOP source add-ons VideoGrabber ;	# legacy media node consumer, no media2 equivalent
+ SubInclude TOP source add-ons Wave ;
+ SubInclude TOP source add-ons WinGrab ;

@@ -1,0 +1,8 @@
+#!/usr/bin/make -f
+
+# Link as a shared object that is still executable, so the Deskbar can load the replicant.
+export VOS_RUNNABLE_ADDON := 1
+include /usr/share/dh-vos/runnable-addon.mk
+
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine

@@ -1,0 +1,14 @@
+Source: becasso
+Section: graphics
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, zlib1g-dev
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+
+Package: becasso
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Layer-based graphics editor for V\OS
+ Becasso is a paint and imaging program with layers, selections, brush
+ and shape tools, plug-in filter add-ons and palettes.

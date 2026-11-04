@@ -1,0 +1,116 @@
+Description: add a source-root Makefile for the class-1 build
+ The debhelper class builds and installs in the source root and reads
+ obj/$(NAME), locales/ and obj/*.rsrc relative to it, but upstream keeps
+ its Makefile under src/ (NAME = ../../MidiSynth, paths relative to src/,
+ catkeys in src/locales). Without a root Makefile there is nothing to
+ build at the root at all. This root Makefile mirrors src/Makefile
+ verbatim except for the src/-prefixed paths, a plain NAME so the engine
+ target and the class install step agree, and a parse-time link that
+ exposes src/locales as locales so the class compiles the nine shipped
+ catalog files. Upstream's src/Makefile is left untouched for its own
+ "cd src && make" flow.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/MidiSynth
+
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,98 @@
++## V\OS class-1 build entry for MidiSynth.
++
++# The debhelper class builds and installs from the source root (it
++# enforces in-source building), while upstream keeps its Makefile under
++# src/ with paths relative to it. This root Makefile mirrors
++# src/Makefile with src/-prefixed paths and a plain NAME so the engine
++# target (obj/$(NAME)) and the class install step agree; upstream's
++# src/Makefile stays untouched for its own "cd src && make" flow.
++
++# The name of the binary.
++NAME = MidiSynth
++
++# The type of binary, must be one of:
++#	APP:	Application
++#	SHARED:	Shared library or add-on
++#	STATIC:	Static library archive
++#	DRIVER:	Kernel driver
++TYPE = APP
++
++# If you plan to use localization, specify the application's MIME signature.
++APP_MIME_SIG = application/x-vnd.midisynth
++
++#	Specify the source files to use.
++SRCS = src/Application.cpp \
++	src/ChordMenuItem.cpp \
++	src/ChordParser.cpp \
++	src/FKeyCatcher.cpp \
++	src/IconMenuItem.cpp \
++	src/InternalSynth.cpp \
++	src/Keyboard.cpp \
++	src/Keyboard2d.cpp \
++	src/KeyTable.cpp \
++	src/MidiOut.cpp \
++	src/Scope.cpp \
++	src/Settings.cpp \
++	src/StatusWindow.cpp \
++	src/View.cpp
++
++#	Specify the resource definition files to use.
++RDEFS = src/MidiSynth.rdef
++
++#	Specify the resource files to use.
++RSRCS =
++
++#	Specify libraries to link against.
++LIBS = be localestub midi midi2 tracker $(STDCPPLIBS)
++
++#	Specify additional paths to directories following the standard libXXX.so
++#	or libXXX.a naming scheme.
++LIBPATHS =
++
++#	Additional paths to look for system headers.
++SYSTEM_INCLUDE_PATHS = /system/develop/headers/private/interface
++
++#	Additional paths to look for local headers.
++LOCAL_INCLUDE_PATHS =
++
++#	Specify the level of optimization that you want.
++OPTIMIZE :=
++
++# 	Specify the codes for languages you are going to support.
++LOCALES = ca de en_AU en_GB en es pt sv tr
++
++#	Specify all the preprocessor symbols to be defined.
++DEFINES =
++
++#	Specify the warning level.
++WARNINGS =
++
++#	With image symbols, stack crawls in the debugger are meaningful.
++SYMBOLS :=
++
++#	Includes debug information.
++DEBUGGER :=
++
++#	Specify any additional compiler flags to be used.
++COMPILER_FLAGS = -Wall -Wno-multichar -Wno-unknown-pragmas
++
++#	Specify any additional linker flags to be used.
++LINKER_FLAGS =
++
++#	Specify the version of this binary.
++APP_VERSION :=
++
++#	(Only used when "TYPE" is "DRIVER").
++DRIVER_PATH =
++
++# The class reads the catkeys from <source root>/locales and the engine
++# compiles catalogs relative to the current directory, while upstream
++# keeps them in src/locales. Expose them at the root for every make run
++# (the generic Makefile already shells out at parse time, so this is the
++# same mechanism).
++$(shell ln -sfn src/locales locales)
++
++## Include the Makefile-Engine
++DEVEL_DIRECTORY := \
++	$(shell findpaths -r "makefile_engine" B_FIND_PATH_DEVELOP_DIRECTORY)
++include $(DEVEL_DIRECTORY)/etc/makefile-engine

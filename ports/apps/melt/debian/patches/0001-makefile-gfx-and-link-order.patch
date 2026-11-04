@@ -1,0 +1,28 @@
+Description: repair the shipped Makefile (missing gfx.rsrc, link order)
+ The Makefile listed a gfx.rsrc prerequisite that the repository does
+ not contain and no rule generates, so make could never build from a
+ clean tree; the merge now uses the shipped Melt.rsrc alone. The link
+ line also listed the libraries before the objects, which Debian's
+ default --as-needed drops; the libraries moved behind the objects
+ (linking extra -lroot -ltracker etc. via LDLIBS still works).
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Melt
+--- a/Makefile
++++ b/Makefile
+@@ -2,11 +2,12 @@
+ CPPFLAGS+= -O3 -fstrict-aliasing -g
+ LDLIBS+= -lbe -ltracker
+ 
++
+ all: Melt
+ 
+-Melt: Melt.o StyleUtils.o gfx.rsrc
+-	g++ -o $@ $(LDLIBS) Melt.o StyleUtils.o
+-	xres -o $@ gfx.rsrc Melt.rsrc
++Melt: Melt.o StyleUtils.o Melt.rsrc
++	g++ -o $@ Melt.o StyleUtils.o $(LDLIBS)
++	xres -o $@ Melt.rsrc
+ 
+ clean:
+ 	rm -f *.o Melt

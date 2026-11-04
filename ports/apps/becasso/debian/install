@@ -1,0 +1,5 @@
+target/Becasso usr/bin
+target/add-ons usr/bin
+target/data/strings usr/bin/data
+target/Palettes usr/share/becasso
+debian/becasso.desktop usr/share/applications

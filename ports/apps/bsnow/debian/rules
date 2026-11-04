@@ -1,0 +1,7 @@
+#!/usr/bin/make -f
+%:
+	dh $@ --with vos --buildsystem=vos_makefile_engine
+
+# Upstream names its makefile in lowercase; the class runs make -f Makefile.
+override_dh_auto_configure:
+	ln -sf makefile Makefile

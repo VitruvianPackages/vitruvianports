@@ -1,0 +1,47 @@
+Description: BRefFilter callback: take the stat_beos variant
+ This system declares BRefFilter::Filter with struct stat_beos*, so the
+ filter helper has to define that overload or it stays abstract and the
+ project settings panel fails to build.
+Author: VitruvianOS Ports <ports@vitruvian.invalid>
+Forwarded: no
+Origin: upstream https://github.com/HaikuArchives/Paladin @ 5b7c442bd68eb3e04ce2b5b780eb2314db3b977a
+
+--- a/Paladin/ThirdParty/TypedRefFilter.h
++++ b/Paladin/ThirdParty/TypedRefFilter.h
+@@ -3,6 +3,7 @@
+ 
+ #include <FilePanel.h>
+ #include <String.h>
++#include <BeBuild.h>
+ 
+ /*
+ 	This utility class is for filtering 
+@@ -25,7 +26,8 @@
+ 	
+ 	// This is because of a source-incompatible change in Haiku's BRefFilter implementation
+ 	// related to POSIX compatibility and the stat structure. *sigh*
+-#ifdef __HAIKU__
++	// V\OS headers declare the stat_beos variant of this callback.
++#if defined(__HAIKU__) || defined(B_HAIKU_VERSION)
+ 	virtual bool			Filter(const entry_ref *ref, BNode *node,
+ 									struct stat_beos *st, const char *filetype);
+ #else
+--- a/Paladin/ThirdParty/TypedRefFilter.cpp
++++ b/Paladin/ThirdParty/TypedRefFilter.cpp
+@@ -1,6 +1,6 @@
+ #include "TypedRefFilter.h"
+ 
+-#ifdef __HAIKU__
++#if defined(__HAIKU__) || defined(B_HAIKU_VERSION)
+ #include <compat/sys/stat.h>
+ #endif
+ 
+@@ -51,7 +51,7 @@
+ }
+ 
+ 
+-#ifdef __HAIKU__
++#if defined(__HAIKU__) || defined(B_HAIKU_VERSION)
+ bool
+ TypedRefFilter::Filter(const entry_ref *ref, BNode *node, struct stat_beos *st,
+ 						const char *filetype)

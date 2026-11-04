@@ -1,0 +1,15 @@
+Source: timetracker
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/TimeTracker
+
+Package: timetracker
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: per-task time tracking application for V\OS
+ TimeTracker records time spent on named tasks: a list view with
+ start/stop per task, a new-task card and saved totals.

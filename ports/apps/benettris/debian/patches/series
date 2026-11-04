@@ -1,0 +1,4 @@
+0001-include-the-sound-helper-from-its-media2-path.patch
+0002-Makefile-link-the-libraries-V-OS-ships.patch
+0003-include-NetAddress-from-the-V-OS-header-layout.patch
+0004-read-data-from-the-system-data-directory.patch

@@ -1,0 +1,40 @@
+#!/usr/bin/make -f
+
+# Own makefile; steered by command-line overrides only.
+# -fPIC, gcc 14 error demotions and --no-as-needed fix old sources and link order.
+
+SPEC_INCLUDES := $(shell grep -oE '^-I.*' /etc/vos.specs | sed 's/^-I/-isystem /' | tr '\n' ' ' | sed 's/ *$$//')
+
+TRAX_CFLAGS := -O2 -Wall -Wno-multichar -Wno-ctor-dtor-privacy \
+	-D_DEFAULT_SOURCE -D_GNU_SOURCE -DSTDC_HEADERS -D__HAIKU__ -fPIC \
+	-Wno-error=implicit-int -Wno-error=incompatible-pointer-types \
+	-include LinuxBuildCompatibility.h $(SPEC_INCLUDES)
+TRAX_LDFLAGS := -Wl,--no-as-needed -lstdc++ -lroot -lm -ltracker
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure:
+	# no configure step; everything goes through the make overrides
+
+override_dh_auto_build:
+	# Upstream never creates its object directories and races under -j.
+	mkdir -p FRegex/depends FindLib/depends Common/depends \
+		TraxSource/depends FastTrax/depends \
+		FRegex/obj.r$$(uname -r) FindLib/obj.r$$(uname -r) \
+		Common/obj.r$$(uname -r) TraxSource/obj.r$$(uname -r) \
+		FastTrax/obj.r$$(uname -r) bin/lib
+	$(MAKE) HAS_FIXED_FEATURES_H=YES MIMESET=true \
+		CFLAGS="$(TRAX_CFLAGS)" LDFLAGS="$(TRAX_LDFLAGS)" \
+		-j$(shell nproc 2>/dev/null || echo 2)
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D bin/TraX $(CURDIR)/debian/trax/system/apps/TraX
+	install -m 0755 -D bin/FastTraX $(CURDIR)/debian/trax/system/apps/FastTraX
+	install -m 0755 -D bin/lib/libTrax.so $(CURDIR)/debian/trax/usr/lib/libTrax.so
+	install -m 0755 -D bin/lib/libfind.so $(CURDIR)/debian/trax/usr/lib/libfind.so
+	# no localized catalogs ship in this tree; keep the count visible
+	@echo "trax: catkeys files: $$(find . -name '*.catkeys' | wc -l)"

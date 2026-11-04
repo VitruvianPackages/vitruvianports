@@ -1,0 +1,12 @@
+# Copyright 2026, Dario Casalinuovo. All rights reserved.
+[Desktop Entry]
+Type=Application
+Name=Vision
+GenericName=IRC Client
+Comment=IRC client with scripting, DCC transfers and multiple networks
+Exec=Vision
+TryExec=Vision
+Terminal=false
+Categories=Network;IRCClient;
+MimeType=x-scheme-handler/irc;
+Icon=vision

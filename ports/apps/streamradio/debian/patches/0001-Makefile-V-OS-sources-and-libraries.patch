@@ -1,0 +1,54 @@
+Description: Makefile: V\OS sources and libraries
+ The legacy private media headers this project was built against
+ (MediaIO.h and the stream adapter on top of it) do not exist on V\OS,
+ so AdapterIO.cpp leaves the build; StreamIO is rewritten onto the
+ network kit in the next patch. LIBS becomes the libraries V\OS ships:
+ be (kits plus the network kit and its HTTP request implementation),
+ translation (BTranslationUtils), media2 (BSoundPlayer, replacing the
+ legacy media entry) and localestub (the static archive behind
+ B_TRANSLATE's BLocaleRoster::GetCatalog). bnetapi and netservices have
+ no separate library on V\OS -- they are part of libbe -- and media is
+ libmedia2; shared goes, the link references nothing from it.
+ SYSTEM_INCLUDE_PATHS adds os/net (Socket.h, NetworkAddressResolver.h)
+ and drops the legacy private/media directories, which V\OS does not
+ ship.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Origin: vendor
+Last-Update: 2026-10-21
+---
+This patch header follows DEP-3: http://dep.debian.net/deps/dep3/
+
+---
+--- a/source/Makefile
++++ b/source/Makefile
+@@ -36,7 +36,6 @@
+ #	same name (source.c or source.cpp) are included from different directories.
+ #	Also note that spaces in folder names do not work well with this Makefile.
+ SRCS = \
+-	 AdapterIO.cpp  \
+ 	 HttpUtils.cpp  \
+ 	 MainWindow.cpp  \
+ 	 RadioApp.cpp  \
+@@ -74,7 +73,7 @@
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = $(STDCPPLIBS) be translation bnetapi media localestub netservices shared
++LIBS = $(STDCPPLIBS) be translation media2 localestub
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative
+@@ -87,10 +86,9 @@
+ #	"#include <header>". Directories that contain the files in SRCS are
+ #	NOT auto-included here.
+ SYSTEM_INCLUDE_PATHS =	/system/develop/headers/private/interface \
+-						/system/develop/headers/private/media \
+-						/system/develop/headers/private/media/experimental \
+ 						/system/develop/headers/private/shared \
+-						/system/develop/headers/private/netservices
++						/system/develop/headers/private/netservices \
++						/system/develop/headers/os/net
+ 
+ #	Additional paths paths to look for local headers. These use the form
+ #	#include "header". Directories that contain the files in SRCS are

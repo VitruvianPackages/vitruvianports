@@ -1,0 +1,6 @@
+0001-build-and-run-on-vos.patch
+0002-environment-and-tray-availability.patch
+0003-96-dpi-and-pixel-font-sizes.patch
+0004-join-the-application-thread-on-shutdown.patch
+0005-use-the-x-client-signature.patch
+0006-single-launch-and-logout.patch

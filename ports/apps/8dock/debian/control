@@ -1,0 +1,17 @@
+Source: 8dock
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/8Dock
+
+Package: 8dock
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: desktop dock launcher for V\OS
+ 8Dock is a small desktop dock: drag files and applications onto it and
+ double-click to launch them, right-click to switch between big and
+ small icons, and drop items on the Trash slot. Items show their Tracker
+ icons and watch their targets through the node monitor.

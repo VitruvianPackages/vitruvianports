@@ -1,0 +1,20 @@
+Description: Makefile: drop the object-dir parent path from NAME
+ Upstream sets NAME = ../CapitalBe so the Makefile-Engine links the binary
+ into the object directory's parent (the project root). The
+ vos_makefile_engine debhelper class installs obj/$(NAME) into
+ /system/apps/$(NAME), so the parent path would leave the binary in
+ /system instead of /system/apps.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+
+--- a/Makefile
++++ b/Makefile
+@@ -5,7 +5,7 @@
+ ## architecture of Haiku.
+ 
+ # The name of the binary.
+-NAME = ../CapitalBe
++NAME = CapitalBe
+ 
+ # The type of binary, must be one of:
+ #	APP:	Application

@@ -1,0 +1,22 @@
+#!/usr/bin/make -f
+
+# Hand-written Makefile; LDLIBS is exported so it is appended to.
+
+export CPPFLAGS := -O3 -fstrict-aliasing -g -include LinuxBuildCompatibility.h \
+	$(shell grep -oE '^-I.*' /etc/vos.specs | sed 's/^-I/-isystem /' | tr '\n' ' ')
+
+%:
+	dh $@ --with vos
+
+override_dh_auto_configure:
+	# plain makefile; nothing to configure
+
+override_dh_auto_build:
+	LDLIBS=-lroot $(MAKE) -j$(shell nproc 2>/dev/null || echo 2)
+
+override_dh_auto_test:
+	# the tree has no test suite
+
+override_dh_auto_install:
+	install -m 0755 -D Melt $(CURDIR)/debian/vos-melt/system/apps/Melt
+	@echo "melt: catkeys files: $$(find . -name '*.catkeys' | wc -l)"

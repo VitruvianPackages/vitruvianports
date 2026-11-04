@@ -1,0 +1,37 @@
+Description: guard app_info fallbacks against unresolvable teams
+ get_app_info() crashed with a segmentation violation inside strdup() on
+ VOS: the team list includes system and service teams that are neither in
+ the roster nor resolvable through the private get_app_ref(), so
+ appInfo.ref kept stale stack data (miscSlayer.cpp:61 in the crash
+ trace); the generic-app icon then still succeeded and the code copied
+ the garbage name. Clear the ref before the fallback chain and only copy
+ a name that actually exists; TeamItem already falls back to the team
+ args when name is NULL.
+Author: VitruvianOS Packagers <maintainers@v-os.dev>
+Forwarded: no
+Origin: https://github.com/HaikuArchives/Slayer
+--- a/src/miscSlayer.cpp
++++ b/src/miscSlayer.cpp
+@@ -30,7 +30,10 @@
+ 	*fullName = NULL;
+ 	status_t status = be_roster->GetRunningAppInfo(team, &appInfo);
+ 	if (status != B_OK) {
+-		// Not an application known to be_roster
++		// Not an application known to be_roster. Clear the ref first: on
++		// VOS a system or service team resolves to no app image and
++		// get_app_ref() leaves the ref untouched (stale stack data).
++		appInfo.ref = entry_ref();
+ 
+ 		if (team == B_SYSTEM_TEAM) {
+ 			// Get icon and name from kernel image
+@@ -57,7 +60,9 @@
+ 	if (status != B_OK) {
+ 		delete icon;
+ 		icon = NULL;
+-	} else {
++	} else if (appInfo.ref.name != NULL) {
++		// The generic-app icon above also succeeds for an empty ref;
++		// only copy a name that actually exists (strdup(NULL) faults).
+ 		*name = strdup(appInfo.ref.name);
+ 		BPath appFullName(&appInfo.ref);
+ 		if (appFullName.InitCheck() == B_OK) {

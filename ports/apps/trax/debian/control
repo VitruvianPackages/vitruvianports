@@ -1,0 +1,16 @@
+Source: trax
+Section: utils
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/TraX
+
+Package: trax
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: file-finding utility for V\OS
+ TraX is a traditional find tool that searches the disk every time, in two
+ flavours: TraX (find-style with a Mac-like interface) and FastTraX (a
+ Windows-find lookalike).

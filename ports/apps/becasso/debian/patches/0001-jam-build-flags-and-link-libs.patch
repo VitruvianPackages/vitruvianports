@@ -1,0 +1,38 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: build flags and link line for V\OS
+Forwarded: not-needed
+Description:
+ The legacy toolchain supplied the include paths and the compat defines
+ by itself. On V\OS the headers live under /system/develop (the list
+ ships in /etc/vos.specs) and LinuxBuildCompatibility.h has to be
+ force-included; g++ also needs -std=gnu++11 because the headers use
+ static_assert, -Wno-narrowing for the upstream byte tables, -fPIC so
+ the add-on images link, and -iquote source so the app's own headers
+ win over same-named interface-kit headers in flat includes. The link
+ line drops -ldevice (no such library on V\OS; the legacy device kit
+ symbols live in libbe) and adds -lroot and -lm, which Debian's ld
+ does not resolve transitively.
+Author: Numerio <b.vitruvio@gmail.com>
+
+--- a/source/Jamfile
++++ b/source/Jamfile
+@@ -6,14 +6,16 @@
+ 	STDCPPLIBS = -lstdc++.r4 ;
+ }
+ 
+-C++FLAGS = -Wall ; # -g -O1 -fsanitize=address ;
+-LINKLIBS on Becasso = -lbe -lz -ltracker -ltranslation -lgame -ldevice $(STDCPPLIBS) ;
++VOS_CXXFLAGS = -Wall -fPIC -std=gnu++11 -Wno-narrowing -iquote source -I/system/develop/headers/os/media2 -I/system/develop/headers/os/be_apps/Tracker @/etc/vos.specs -include LinuxBuildCompatibility.h ;
++C++FLAGS = $(VOS_CXXFLAGS) ; # -g -O1 -fsanitize=address ;
++CCFLAGS = $(VOS_CXXFLAGS) ;
++LINKLIBS on Becasso = -lbe -lz -ltracker -ltranslation -lgame -lroot -lm $(STDCPPLIBS) ;
+ LINKFLAGS on Becasso = -Xlinker -soname=_APP_ ; # -fsanitize=address ;
+ 
+ AS = nasm -f elf32 ;
+ 
+ local have64bits = [ GLOB /system : kernel_x86_64 ] ;
+-x86_sources = 	mmx_gcc.asm ;
++x86_sources = ;	# mmx_gcc.asm is 32-bit only; mmx.c has the x86_64 fallbacks
+ if $(have64bits) {
+ 	x86_sources = ;
+ }

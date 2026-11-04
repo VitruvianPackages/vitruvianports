@@ -1,0 +1,21 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: link against libm explicitly
+Forwarded: not-needed
+Description:
+ On the legacy platform the math functions (round() et al.) resolved
+ through libroot, which pulled in libm. Debian linker does not resolve
+ symbols transitively, so the link fails on obj/AirBrushTool.o without
+ -lm on the command line.
+Author: Numerio <b.vitruvio@gmail.com>
+
+--- a/Makefile
++++ b/Makefile
+@@ -100,7 +100,7 @@
+ #		naming scheme you need to specify the path to the library
+ #		and it's name
+ #		library: my_lib.a entry: my_lib.a or path/my_lib.a
+-LIBS= be tracker translation localestub z $(STDCPPLIBS)
++LIBS= be tracker translation localestub z m $(STDCPPLIBS)
+ 
+ #	specify additional paths to directories following the standard
+ #	libXXX.so or libXXX.a naming scheme.  You can specify full paths
