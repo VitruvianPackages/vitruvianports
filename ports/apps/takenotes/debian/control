@@ -1,0 +1,16 @@
+Source: takenotes
+Section: editors
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/HaikuArchives/TakeNotes
+
+Package: takenotes
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: post-it style notes
+ TakeNotes keeps desktop notes as ordinary files with typed attributes.
+ Tags are indexed on the boot volume, so notes stay searchable by tag,
+ and a note can be linked to the application it belongs to.
