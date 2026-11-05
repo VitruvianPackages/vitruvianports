@@ -1,0 +1,4454 @@
+Description: XVitruvian: rootless X server DDX for V\OS. Each X toplevel is a BSurface driven from the server thread; keyboard and pointer input come from the surface events, the optional input_server tap adds XI2 raw motion.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+---
+diff --git a/hw/vitruvian/vInit.cpp b/hw/vitruvian/vInit.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vInit.cpp
+@@ -0,0 +1,894 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Screen bring-up and the DIX entry points. The screen is a plain fb
++// framebuffer sized to the V\OS display; toplevel X windows become
++// real BWindows and upload damage into them.
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include "vPriv.h"
++#include "servermd.h"
++
++extern "C" {
++#include "glx_extinit.h"
++}
++
++#include <Application.h>
++#include <Clipboard.h>
++#include <Messenger.h>
++#include <Message.h>
++#include <Rect.h>
++#include <Roster.h>
++#include <Screen.h>
++#include <String.h>
++
++#include <fcntl.h>
++#include <signal.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <new>
++
++#include <OutputAddonClient.h>
++
++
++DevPrivateKeyRec gVWindowPrivateKeyRec;
++ScreenPtr	gVScreen = NULL;
++static char*	sRootBits = NULL;
++static size_t	sRootSize = 0;
++XVApp*		gVApp = NULL;
++OutputAddonClient* gVAddon = NULL;
++int		gVInputPort = -1;
++int		gVWakeRead = -1;
++int		gVWakeWrite = -1;
++int32 gVFocusWindowId = 0;
++
++static int32 sOpCapacity = 0;
++static VOp*	sOps = NULL;
++static int32 sOpCount = 0;
++static sem_id	sOpLock = -1;
++static int	sListenFd = -1;
++static OsTimerPtr sIdleTimer = NULL;
++static BMessenger sAppMessenger;
++static volatile bool sAppReady = false;
++
++enum {
++	kMsgWindowPid	= 'xwPd',
++	kMsgWindowGone	= 'xwGn'
++};
++
++// Idle exit: only for a socket-activated server, which janus restarts.
++static const CARD32 kIdleExitMs = 60000;
++
++
++//	#pragma mark - server op queue
++
++
++void
++VEnqueueOp(const VOp& op)
++{
++	if (sOpLock < B_OK || acquire_sem(sOpLock) != B_OK)
++		return;
++
++	int32 slot = atomic_add(&sOpCount, 1);
++	if (slot >= sOpCapacity) {
++		atomic_add(&sOpCount, -1);
++		release_sem(sOpLock);
++		return;
++	}
++
++	sOps[slot] = op;
++	release_sem(sOpLock);
++	VWakeServer();
++}
++
++
++void
++VWakeServer()
++{
++	if (gVWakeWrite >= 0) {
++		char byte = 0;
++		ssize_t ignored = write(gVWakeWrite, &byte, sizeof(byte));
++		(void)ignored;
++	}
++}
++
++
++void
++VProcessOps()
++{
++	while (true) {
++		if (sOpLock < B_OK || acquire_sem(sOpLock) != B_OK)
++			return;
++
++		int32 count = sOpCount;
++		if (count <= 0) {
++			release_sem(sOpLock);
++			return;
++		}
++
++		VOp ops[32];
++		int32 take = count < 32 ? count : 32;
++		memcpy(ops, sOps, take * sizeof(VOp));
++		if (count > take)
++			memmove(sOps, sOps + take, (count - take) * sizeof(VOp));
++		atomic_add(&sOpCount, -take);
++		release_sem(sOpLock);
++
++		for (int32 i = 0; i < take; i++) {
++			const VOp& op = ops[i];
++			switch (op.what) {
++				case kVOpScreenChanged:
++					VResizeScreen(op.i0, op.i1);
++					break;
++				case kVOpSettingsChanged:
++					VSettingsUpdate();
++					break;
++				case kVOpKeymapChanged:
++					VReloadKeymap();
++					break;
++				case kVOpClipboardChanged:
++					VClipboardChanged();
++					break;
++				case kVOpSetTeam:
++					VWindowSetTeam(op.windowId, (team_id)op.i0);
++					break;
++				default:
++					break;
++			}
++		}
++	}
++}
++
++
++static void
++vNotifyRead(int /*fd*/, int /*ready*/, void* /*data*/)
++{
++	// Drain the wake pipe; input and window ops were already queued.
++	char buffer[64];
++	while (read(gVWakeRead, buffer, sizeof(buffer)) > 0)
++		;
++
++	VDrainInputPort();
++	VProcessOps();
++}
++
++
++//	#pragma mark - application
++
++
++// Window to client pid and the team it is listed under; app thread only.
++struct VWindowTeam {
++	pid_t		pid;
++	team_id		team;
++};
++static std::map<uint32, VWindowTeam> sWindowTeams;
++
++
++static pid_t
++vParentPid(pid_t pid)
++{
++	char path[64];
++	snprintf(path, sizeof(path), "/proc/%d/stat", (int)pid);
++	FILE* f = fopen(path, "r");
++	if (f == NULL)
++		return -1;
++	char line[512];
++	size_t size = fread(line, 1, sizeof(line) - 1, f);
++	fclose(f);
++	line[size] = '\0';
++	// comm may hold spaces and parentheses; ppid follows the last ')'.
++	const char* end = strrchr(line, ')');
++	int ppid = -1;
++	if (end == NULL || sscanf(end + 1, " %*c %d", &ppid) != 1)
++		return -1;
++	return (pid_t)ppid;
++}
++
++
++// Team of the registered app owning pid: the process itself, else the
++// nearest ancestor that is a registered X client (browser helpers).
++static team_id
++vResolveTeam(pid_t pid)
++{
++	static const char kClient[] = "application/x-vnd.vos-x-";
++	pid_t p = pid;
++	for (int depth = 0; p > 1 && depth < 16; depth++) {
++		app_info info;
++		if (be_roster->GetRunningAppInfo((team_id)p, &info) == B_OK
++			&& (depth == 0
++				|| strncmp(info.signature, kClient, sizeof(kClient) - 1)
++					== 0)) {
++			return (team_id)p;
++		}
++		p = vParentPid(p);
++	}
++	return -1;
++}
++
++
++static void
++vAttributeWindow(uint32 id, VWindowTeam& entry)
++{
++	team_id team = vResolveTeam(entry.pid);
++	if (team <= 0 || team == entry.team)
++		return;
++	entry.team = team;
++	VOp op;
++	memset(&op, 0, sizeof(op));
++	op.what = kVOpSetTeam;
++	op.windowId = id;
++	op.i0 = (int32)team;
++	VEnqueueOp(op);
++}
++
++
++void
++VPostWindowPid(uint32 windowId, int32 pid)
++{
++	if (!sAppReady)
++		return;
++	BMessage message(kMsgWindowPid);
++	message.AddInt32("window", (int32)windowId);
++	message.AddInt32("pid", pid);
++	sAppMessenger.SendMessage(&message, (BHandler*)NULL, 0);
++}
++
++
++void
++VPostWindowGone(uint32 windowId)
++{
++	if (!sAppReady)
++		return;
++	BMessage message(kMsgWindowGone);
++	message.AddInt32("window", (int32)windowId);
++	sAppMessenger.SendMessage(&message, (BHandler*)NULL, 0);
++}
++
++
++class XVApp : public BApplication {
++public:
++								XVApp();
++	virtual						~XVApp();
++
++	virtual	void				ReadyToRun();
++	virtual	void				MessageReceived(BMessage* message);
++	virtual	bool				QuitRequested();
++};
++
++
++XVApp::XVApp()
++	:
++	BApplication("application/x-vnd.v-os-xvitruvian")
++{
++}
++
++
++XVApp::~XVApp()
++{
++}
++
++
++// A logout or shutdown ends the X server the way SIGTERM does; be_app
++// stays alive for the surfaces until the process exits.
++bool
++XVApp::QuitRequested()
++{
++	kill(getpid(), SIGTERM);
++	VWakeServer();
++	return true;
++}
++
++
++// Off the startup path so a slow reply cannot delay the first client.
++static int32
++vAddonThread(void*)
++{
++	if (gVAddon != NULL)
++		return 0;
++
++	OutputAddonClient* addon = new(std::nothrow) OutputAddonClient();
++	if (addon == NULL)
++		return 0;
++
++	if (addon->Connect("XVitruvian X server") != B_OK) {
++		delete addon;
++		return 0;
++	}
++	gVAddon = addon;
++	return 0;
++}
++
++
++static void
++vConnectAddon()
++{
++	thread_id thread = spawn_thread(vAddonThread, "xv addon",
++		B_NORMAL_PRIORITY, NULL);
++	if (thread >= B_OK)
++		resume_thread(thread);
++}
++
++
++void
++XVApp::ReadyToRun()
++{
++	be_clipboard->StartWatching(BMessenger(this));
++	// A client registers after it connects: re-attribute on each launch.
++	be_roster->StartWatching(BMessenger(this), B_REQUEST_LAUNCHED);
++	sAppMessenger = BMessenger(this);
++	sAppReady = true;
++	VSettingsRefresh();
++	VKeymapRefresh();
++	vConnectAddon();
++	{
++		// The first keymap was compiled before the roles were known.
++		VOp op;
++		memset(&op, 0, sizeof(op));
++		op.what = kVOpKeymapChanged;
++		VEnqueueOp(op);
++	}
++	VDndInit();
++}
++
++
++void
++XVApp::MessageReceived(BMessage* message)
++{
++	switch (message->what) {
++		case kMsgWindowPid:
++		{
++			int32 window, pid;
++			if (message->FindInt32("window", &window) != B_OK
++				|| message->FindInt32("pid", &pid) != B_OK) {
++				break;
++			}
++			VWindowTeam& entry = sWindowTeams[(uint32)window];
++			if (entry.pid != (pid_t)pid) {
++				entry.pid = (pid_t)pid;
++				entry.team = -1;
++			}
++			vAttributeWindow((uint32)window, entry);
++			break;
++		}
++		case kMsgWindowGone:
++		{
++			int32 window;
++			if (message->FindInt32("window", &window) == B_OK)
++				sWindowTeams.erase((uint32)window);
++			break;
++		}
++		case B_SOME_APP_LAUNCHED:
++		{
++			for (std::map<uint32, VWindowTeam>::iterator it
++					= sWindowTeams.begin(); it != sWindowTeams.end(); ++it) {
++				vAttributeWindow(it->first, it->second);
++			}
++			break;
++		}
++		case B_CLIPBOARD_CHANGED:
++		{
++			VOp op;
++			memset(&op, 0, sizeof(op));
++			op.what = kVOpClipboardChanged;
++			VEnqueueOp(op);
++			break;
++		}
++		case B_SCREEN_CHANGED:
++		{
++			BScreen screen(0);
++			BRect frame = screen.Frame();
++			VOp op;
++			op.what = kVOpScreenChanged;
++			op.windowId = 0;
++			op.i0 = (int32)frame.IntegerWidth() + 1;
++			op.i1 = (int32)frame.IntegerHeight() + 1;
++			op.i2 = 0;
++			op.i3 = 0;
++			VEnqueueOp(op);
++			break;
++		}
++		case B_COLORS_UPDATED:
++		case B_FONTS_UPDATED:
++		{
++			VSettingsRefresh();
++			VOp op;
++			memset(&op, 0, sizeof(op));
++			op.what = kVOpSettingsChanged;
++			VEnqueueOp(op);
++			BApplication::MessageReceived(message);
++			break;
++		}
++		case B_KEY_MAP_LOADED:
++		{
++			VKeymapRefresh();
++			VOp op;
++			memset(&op, 0, sizeof(op));
++			op.what = kVOpKeymapChanged;
++			VEnqueueOp(op);
++			break;
++		}
++		default:
++			BApplication::MessageReceived(message);
++			break;
++	}
++}
++
++
++//	#pragma mark - property observation
++
++
++// Connected clients, not counting one that is going away.
++static int
++VLiveClientCount()
++{
++	int count = 0;
++	for (int i = 1; i < currentMaxClients; i++) {
++		ClientPtr client = clients[i];
++		if (client != NULL && (client->clientState == ClientStateInitial
++				|| client->clientState == ClientStateRunning)) {
++			count++;
++		}
++	}
++	return count;
++}
++
++
++static void
++vPropertyCallback(CallbackListPtr* /*pcbl*/, void* /*arg*/, void* callData)
++{
++	PropertyStateRec* rec = (PropertyStateRec*)callData;
++	if (rec == NULL || rec->win == NULL || rec->prop == NULL)
++		return;
++
++	VClipboardPropertyChanged(rec->win, rec->prop, rec->state);
++	// A deleted property is being freed.
++	if (rec->state != PropertyDelete)
++		VWindowPropertyChanged(rec->win, rec->prop->propertyName);
++}
++
++
++static CARD32
++vIdleExit(OsTimerPtr /*timer*/, CARD32 /*now*/, void* /*arg*/)
++{
++	if (VLiveClientCount() == 0) {
++		ErrorF("XVitruvian: idle, exiting\n");
++		kill(getpid(), SIGTERM);
++	}
++	return 0;
++}
++
++
++static void
++vClientCallback(CallbackListPtr* /*pcbl*/, void* /*arg*/, void* callData)
++{
++	NewClientInfoRec* info = (NewClientInfoRec*)callData;
++	if (info != NULL && info->client->clientState == ClientStateRunning)
++		VSetupWindowManager();
++
++	if (sListenFd >= 0) {
++		sIdleTimer = TimerSet(sIdleTimer, 0,
++			VLiveClientCount() == 0 ? kIdleExitMs : 0, vIdleExit, NULL);
++	}
++}
++
++
++//	#pragma mark - DIX entry points
++
++
++// -listenfd N: serve the already listening unix socket N (socket
++// activation); the server then creates no sockets or lock of its own.
++extern "C" int
++ddxProcessArgument(int argc, char** argv, int i)
++{
++	if (strcmp(argv[i], "-listenfd") == 0) {
++		if (i + 1 >= argc)
++			return 0;
++		sListenFd = atoi(argv[i + 1]);
++		NoListenAll = TRUE;
++		return 2;
++	}
++	return 0;
++}
++
++
++extern "C" void
++OsVendorFatalError(const char* /*f*/, va_list /*args*/)
++{
++}
++
++
++extern "C" void
++ddxUseMsg(void)
++{
++	ErrorF("-listenfd fd           serve this listening unix socket; exit when idle\n");
++}
++
++
++extern "C" void
++ddxInputThreadInit(void)
++{
++	// Input arrives on the dedicated input_server port thread; the
++	// server's own input thread stays off.
++}
++
++
++extern "C" void
++OsVendorInit(void)
++{
++}
++
++
++extern "C" void
++AbortDDX(void)
++{
++}
++
++
++extern "C" void
++ddxGiveUp(enum ExitCode /*error*/)
++{
++}
++
++
++static Bool
++vCloseScreen(ScreenPtr pScreen)
++{
++	return fbCloseScreen(pScreen);
++}
++
++
++static Bool
++vCursorOffScreen(ScreenPtr* /*ppScreen*/, int* /*x*/, int* /*y*/)
++{
++	return FALSE;
++}
++
++
++static void
++vCrossScreen(ScreenPtr /*pScreen*/, Bool /*entering*/)
++{
++}
++
++
++static miPointerScreenFuncRec vPointerCursorFuncs = {
++	vCursorOffScreen,
++	vCrossScreen,
++	miPointerWarpCursor
++};
++
++
++// app_server draws the pointer; the X side keeps no sprite of its own.
++static Bool
++vRealizeCursor(DeviceIntPtr, ScreenPtr, CursorPtr)
++{
++	return TRUE;
++}
++
++
++static void
++vSetCursor(DeviceIntPtr, ScreenPtr, CursorPtr, int, int)
++{
++}
++
++
++static void
++vMoveCursor(DeviceIntPtr, ScreenPtr, int, int)
++{
++}
++
++
++static Bool
++vDeviceCursorInitialize(DeviceIntPtr, ScreenPtr)
++{
++	return TRUE;
++}
++
++
++static void
++vDeviceCursorCleanup(DeviceIntPtr, ScreenPtr)
++{
++}
++
++
++static miPointerSpriteFuncRec vSpriteFuncs = {
++	vRealizeCursor,
++	vRealizeCursor,
++	vSetCursor,
++	vMoveCursor,
++	vDeviceCursorInitialize,
++	vDeviceCursorCleanup
++};
++
++
++// MIT-SHM for the screen: segment put/get only. Shared pixmaps are left
++// out; clients that draw through them composite blank content.
++struct VShmFuncs {
++	PixmapPtr	(*CreatePixmap)(ScreenPtr, int, int, int, char*);
++	void		(*PutImage)(DrawablePtr, GCPtr, int, unsigned int, int, int,
++					int, int, int, int, int, int, char*);
++};
++
++extern "C" void ShmRegisterFuncs(ScreenPtr pScreen, void* funcs);
++
++static VShmFuncs sShmFuncs = { NULL, NULL };
++
++
++static Bool
++vScreenInit(ScreenPtr pScreen, int argc, char** argv)
++{
++	int dpix = monitorResolution;
++	int dpiy = monitorResolution;
++	if (dpix == 0)
++		dpix = 96;
++	if (dpiy == 0)
++		dpiy = 96;
++
++	BScreen screen(0);
++	BRect frame = screen.Frame();
++	int width = (int)frame.IntegerWidth() + 1;
++	int height = (int)frame.IntegerHeight() + 1;
++
++	// Invisible root backing; the screen itself is never blitted. Each
++	// toplevel window gets its own pixmap through fb's window handling.
++	char* pbits = (char*)calloc((size_t)width * height, 4);
++	if (pbits == NULL)
++		return FALSE;
++	sRootBits = pbits;
++	sRootSize = (size_t)width * height * 4;
++
++	if (!miSetVisualTypesAndMasks(24, 1 << TrueColor, 8, TrueColor,
++			0xff0000, 0x00ff00, 0x0000ff)
++		|| !miSetPixmapDepths())
++		return FALSE;
++
++	if (!fbScreenInit(pScreen, pbits, width, height, dpix, dpiy,
++			width, 32))
++		return FALSE;
++
++	fbPictureInit(pScreen, 0, 0);
++	ShmRegisterFuncs(pScreen, &sShmFuncs);
++
++	pScreen->CreateWindow = VCreateWindow;
++	pScreen->DestroyWindow = VDestroyWindow;
++	pScreen->RealizeWindow = VRealizeWindow;
++	pScreen->UnrealizeWindow = VUnrealizeWindow;
++	pScreen->PositionWindow = VPositionWindow;
++	pScreen->ChangeWindowAttributes = VChangeWindowAttributes;
++
++	pScreen->CloseScreen = vCloseScreen;
++
++	// Same convention as Xvfb: the default colormap maps these indices.
++	pScreen->blackPixel = 0;
++	pScreen->whitePixel = 1;
++
++	pScreen->InstallColormap = miInstallColormap;
++	pScreen->UninstallColormap = miUninstallColormap;
++	pScreen->ListInstalledColormaps = miListInstalledColormaps;
++	pScreen->ResolveColor = miResolveColor;
++	if (!fbCreateDefColormap(pScreen))
++		return FALSE;
++
++	if (!miPointerInitialize(pScreen, &vSpriteFuncs, &vPointerCursorFuncs,
++			FALSE))
++		return FALSE;
++
++	return TRUE;
++}
++
++
++static void
++vRandRScreenSize(ScreenPtr pScreen, int width, int height)
++{
++	rrScrPrivPtr pScrPriv = rrGetScrPriv(pScreen);
++	if (pScrPriv == NULL)
++		return;
++
++	SetRootClip(pScreen, ROOT_CLIP_NONE);
++	pScreen->width = width;
++	pScreen->height = height;
++	pScreen->mmWidth = (CARD32)width * 254 / (96 * 10);
++	pScreen->mmHeight = (CARD32)height * 254 / (96 * 10);
++	SetRootClip(pScreen, ROOT_CLIP_FULL);
++
++	RRScreenSizeNotify(pScreen);
++	RRTellChanged(pScreen);
++}
++
++
++// The root pixmap grows with the screen; anything drawing on the root
++// (background, root-window tools) must stay inside the allocation.
++void
++VResizeScreen(int width, int height)
++{
++	ScreenPtr pScreen = gVScreen;
++	if (pScreen == NULL || width <= 0 || height <= 0)
++		return;
++
++	PixmapPtr root = (*pScreen->GetScreenPixmap)(pScreen);
++	size_t size = (size_t)width * height * 4;
++	char* bits = NULL;
++	if (size > sRootSize) {
++		bits = (char*)calloc(size, 1);
++		if (bits == NULL)
++			return;
++	}
++	(*pScreen->ModifyPixmapHeader)(root, width, height, -1, -1, width * 4,
++		bits);
++	if (bits != NULL) {
++		free(sRootBits);
++		sRootBits = bits;
++		sRootSize = size;
++	}
++
++	vRandRScreenSize(pScreen, width, height);
++	VResizeValuators(pScreen);
++}
++
++
++void
++VResizeValuators(ScreenPtr pScreen)
++{
++	// Keep the XI2 pointer's absolute axes inside the new screen bounds.
++	for (DeviceIntPtr dev = inputInfo.devices; dev != NULL;
++			dev = dev->next) {
++		if (dev->valuator == NULL || dev->valuator->numAxes < 2)
++			continue;
++		dev->valuator->axes[0].max_value = pScreen->width - 1;
++		dev->valuator->axes[1].max_value = pScreen->height - 1;
++	}
++}
++
++
++static Bool
++vRandRInit(ScreenPtr pScreen)
++{
++	rrScrPrivPtr pScrPriv;
++	RRModePtr mode;
++	RRCrtcPtr crtc;
++	RROutputPtr output;
++	xRRModeInfo modeInfo;
++	char name[64];
++
++	if (!RRScreenInit(pScreen))
++		return FALSE;
++
++	pScrPriv = rrGetScrPriv(pScreen);
++	pScrPriv->rrGetInfo = NULL;
++	pScrPriv->rrCrtcSet = NULL;
++	pScrPriv->rrScreenSetSize = NULL;
++	pScrPriv->rrOutputValidateMode = NULL;
++	pScrPriv->rrModeDestroy = NULL;
++
++	RRScreenSetSizeRange(pScreen, 1, 1, 16384, 16384);
++
++	snprintf(name, sizeof(name), "%dx%d", pScreen->width, pScreen->height);
++	memset(&modeInfo, 0, sizeof(modeInfo));
++	modeInfo.width = pScreen->width;
++	modeInfo.height = pScreen->height;
++	modeInfo.nameLength = strlen(name);
++
++	mode = RRModeGet(&modeInfo, name);
++	if (mode == NULL)
++		return FALSE;
++
++	crtc = RRCrtcCreate(pScreen, NULL);
++	if (crtc == NULL)
++		return FALSE;
++	RRCrtcGammaSetSize(crtc, 256);
++
++	output = RROutputCreate(pScreen, "vitruvian", strlen("vitruvian"),
++		NULL);
++	if (output == NULL)
++		return FALSE;
++	if (!RROutputSetClones(output, NULL, 0))
++		return FALSE;
++	if (!RROutputSetModes(output, &mode, 1, 0))
++		return FALSE;
++	if (!RROutputSetCrtcs(output, &crtc, 1))
++		return FALSE;
++	if (!RROutputSetConnection(output, RR_Connected))
++		return FALSE;
++	RRCrtcNotify(crtc, mode, 0, 0, RR_Rotate_0, NULL, 1, &output);
++
++	return TRUE;
++}
++
++
++static int32
++vAppThread(void* data)
++{
++	XVApp* app = static_cast<XVApp*>(data);
++	app->LockLooper();
++	app->Run();
++	return 0;
++}
++
++
++extern "C" void
++InitOutput(ScreenInfo* screen_info, int argc, char** argv)
++{
++	static const PixmapFormatRec kFormats[] = {
++		{ 1, 1, BITMAP_SCANLINE_PAD },
++		{ 8, 8, BITMAP_SCANLINE_PAD },
++		{ 16, 16, BITMAP_SCANLINE_PAD },
++		{ 24, 32, BITMAP_SCANLINE_PAD },
++		{ 32, 32, BITMAP_SCANLINE_PAD }
++	};
++	// Software GLX through Mesa's swrast, as Xvfb does.
++	xorgGlxCreateVendor();
++
++	screen_info->imageByteOrder = IMAGE_BYTE_ORDER;
++	screen_info->bitmapScanlineUnit = BITMAP_SCANLINE_UNIT;
++	screen_info->bitmapScanlinePad = BITMAP_SCANLINE_PAD;
++	screen_info->bitmapBitOrder = BITMAP_BIT_ORDER;
++	screen_info->numPixmapFormats = sizeof(kFormats) / sizeof(kFormats[0]);
++	for (int i = 0; i < screen_info->numPixmapFormats; i++)
++		screen_info->formats[i] = kFormats[i];
++
++	if (gVApp == NULL) {
++		gVApp = new(std::nothrow) XVApp();
++		if (gVApp == NULL)
++			FatalError("XVitruvian: cannot create the application\n");
++		// Run() loops on the calling thread; X owns this one.
++		gVApp->Unlock();
++		thread_id thread = spawn_thread(vAppThread, "xv app",
++			B_DISPLAY_PRIORITY, gVApp);
++		if (thread < B_OK || resume_thread(thread) != B_OK)
++			FatalError("XVitruvian: cannot start the application\n");
++	}
++
++	if (gVWakeRead < 0) {
++		int fds[2];
++		if (pipe(fds) == 0) {
++			gVWakeRead = fds[0];
++			gVWakeWrite = fds[1];
++			fcntl(gVWakeRead, F_SETFL, O_NONBLOCK);
++			// A full pipe already holds a pending wakeup; window threads
++			// must never block here while holding their window lock.
++			fcntl(gVWakeWrite, F_SETFL, O_NONBLOCK);
++			SetNotifyFd(gVWakeRead, vNotifyRead, X_NOTIFY_READ, NULL);
++		}
++	}
++
++	if (sOpLock < B_OK)
++		sOpLock = create_sem(1, "xvitruvian ops");
++	if (sOps == NULL) {
++		sOpCapacity = 256;
++		sOps = (VOp*)calloc(sOpCapacity, sizeof(VOp));
++	}
++
++	if (-1 == AddScreen(vScreenInit, argc, argv))
++		FatalError("XVitruvian: cannot add screen\n");
++
++	gVScreen = screenInfo.screens[0];
++
++	if (!vRandRInit(gVScreen))
++		ErrorF("XVitruvian: RandR init failed\n");
++
++	if (!dixRegisterPrivateKey(gVWindowPrivateKey, PRIVATE_WINDOW, 0))
++		FatalError("XVitruvian: cannot register window private\n");
++
++	AddCallback(&PropertyStateCallback, vPropertyCallback, NULL);
++	AddCallback(&ClientStateCallback, vClientCallback, NULL);
++
++	if (sListenFd >= 0) {
++		ListenOnOpenFD(sListenFd, 0);
++		// Covers a connection that never completes setup.
++		sIdleTimer = TimerSet(sIdleTimer, 0, kIdleExitMs, vIdleExit, NULL);
++	}
++
++	char envBuffer[32];
++	snprintf(envBuffer, sizeof(envBuffer), "%d", 96);
++	setenv("Xft.dpi", envBuffer, 0);
++
++	ErrorF("XVitruvian: screen %dx%d on V\\OS app_server\n",
++		gVScreen->width, gVScreen->height);
++}
+diff --git a/hw/vitruvian/vInput.cpp b/hw/vitruvian/vInput.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vInput.cpp
+@@ -0,0 +1,912 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Core keyboard and pointer input comes from the toplevel BWindows' own
++// messages (they carry be:evdev_code). The optional input_server tap
++// (the xvitruvian filter add-on) only supplies XI2 raw motion. Events
++// are queued into the DIX under the input lock; XI2 device creation
++// stays on the server thread.
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include "vPriv.h"
++
++#define class class_
++#define public public_
++extern "C" {
++#include "xkbsrv.h"
++}
++#undef public
++#undef class
++
++#include <Application.h>
++#include <InterfaceDefs.h>
++#include <Autolock.h>
++#include <Locker.h>
++#include <FindDirectory.h>
++#include <Message.h>
++#include <Path.h>
++#include <View.h>
++#include <Window.h>
++
++#include <errno.h>
++#include <fcntl.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <new>
++
++
++// Must match the xvitruvian input_server filter add-on.
++#define XVITRUVIAN_INPUT_PORT_NAME	"v-os:xvitruvian_input"
++
++
++static DeviceIntPtr sPointerMaster = NULL;
++// Set once the input_server tap delivers raw motion of its own.
++static int32 sTapRaw = 0;
++static DeviceIntPtr sKeyboardMaster = NULL;
++static thread_id sInputThread = -1;
++static int32 sInputQuit = 0;
++static uint32 sLastButtons = 0;
++static BPoint sLastWhere(-1, -1);
++
++struct VInputDevice {
++	int32		id;
++	bool		pointer;
++	char		name[64];
++	VInputDevice*	next;
++};
++
++static VInputDevice* sPendingDevices = NULL;
++static sem_id sPendingLock = -1;
++
++
++static void
++vPokeEQ()
++{
++	VWakeServer();
++}
++
++
++//	#pragma mark - keymap from the V\OS keyboard settings
++
++
++static void
++vTrimQuoted(char* value)
++{
++	char* start = strchr(value, '"');
++	if (start == NULL)
++		return;
++	char* end = strrchr(value, '"');
++	if (end == NULL || end <= start)
++		return;
++	*end = '\0';
++	memmove(value, start + 1, strlen(start));
++}
++
++
++static void
++vReadXkbSetting(const char* path, const char* key, char* out, size_t outSize)
++{
++	out[0] = '\0';
++
++	FILE* file = fopen(path, "r");
++	if (file == NULL)
++		return;
++
++	char line[512];
++	size_t keyLength = strlen(key);
++	while (fgets(line, sizeof(line), file) != NULL) {
++		if (strncmp(line, key, keyLength) != 0 || line[keyLength] != '=')
++			continue;
++		char* value = line + keyLength + 1;
++		value[strcspn(value, "\n")] = '\0';
++		vTrimQuoted(value);
++		snprintf(out, outSize, "%s", value);
++		break;
++	}
++
++	fclose(file);
++}
++
++
++static BLocker sRoleLock("xv roles");
++static char sRoleOptions[64];
++
++
++// Application thread: reads the Ctrl/Alt roles from input_server (never
++// from the X thread) and caches the matching xkb option. Linux mode needs
++// none; classic mode swaps Alt and Ctrl for X clients.
++void
++VKeymapRefresh()
++{
++	uint32 command = 0;
++	uint32 control = 0;
++	char options[sizeof(sRoleOptions)] = "";
++	if (get_modifier_key(B_LEFT_COMMAND_KEY, &command) == B_OK
++		&& get_modifier_key(B_LEFT_CONTROL_KEY, &control) == B_OK
++		&& command == 0x5d && control == 0x5c) {
++		strlcpy(options, "ctrl:swap_lalt_lctl", sizeof(options));
++	}
++
++	BAutolock locker(sRoleLock);
++	strlcpy(sRoleOptions, options, sizeof(sRoleOptions));
++}
++
++
++// Appends the role option to the layout's options unless already there.
++static void
++vMergeRoleOptions(char* options, size_t size)
++{
++	char role[sizeof(sRoleOptions)];
++	{
++		BAutolock locker(sRoleLock);
++		strlcpy(role, sRoleOptions, sizeof(role));
++	}
++	if (role[0] == '\0')
++		return;
++
++	for (const char* p = options; *p != '\0';) {
++		size_t length = strcspn(p, ",");
++		if (length == strlen(role) && strncmp(p, role, length) == 0)
++			return;
++		p += length + (p[length] == ',' ? 1 : 0);
++	}
++	if (options[0] != '\0')
++		strlcat(options, ",", size);
++	strlcat(options, role, size);
++}
++
++
++static void
++vFillRMLVO(XkbRMLVOSet* rmlvo)
++{
++	static char rules[] = "evdev";
++	static char model[64];
++	static char layout[64];
++	static char variant[128];
++	static char options[256];
++
++	// Same order as input_server: the Keymap preflet's cache, then the
++	// system default written at first boot.
++	BPath cache;
++	if (find_directory(B_USER_SETTINGS_DIRECTORY, &cache) == B_OK
++		&& cache.Append("input/xkb_layout") == B_OK) {
++		vReadXkbSetting(cache.Path(), "model", model, sizeof(model));
++		vReadXkbSetting(cache.Path(), "layout", layout, sizeof(layout));
++		vReadXkbSetting(cache.Path(), "variant", variant, sizeof(variant));
++		vReadXkbSetting(cache.Path(), "options", options, sizeof(options));
++	}
++	if (layout[0] == '\0') {
++		const char* path = "/etc/default/keyboard";
++		vReadXkbSetting(path, "XKBMODEL", model, sizeof(model));
++		vReadXkbSetting(path, "XKBLAYOUT", layout, sizeof(layout));
++		vReadXkbSetting(path, "XKBVARIANT", variant, sizeof(variant));
++		vReadXkbSetting(path, "XKBOPTIONS", options, sizeof(options));
++	}
++
++	vMergeRoleOptions(options, sizeof(options));
++
++	rmlvo->rules = rules;
++	rmlvo->model = model[0] != '\0' ? model : (char*)"pc105";
++	rmlvo->layout = layout[0] != '\0' ? layout : (char*)"us";
++	rmlvo->variant = variant;
++	rmlvo->options = options;
++}
++
++
++//	#pragma mark - devices
++
++
++static int
++vKeyboardProc(DeviceIntPtr pDevice, int onoff)
++{
++	switch (onoff) {
++		case DEVICE_INIT:
++		{
++			XkbRMLVOSet rmlvo;
++			memset(&rmlvo, 0, sizeof(rmlvo));
++			vFillRMLVO(&rmlvo);
++			InitKeyboardDeviceStruct(pDevice, &rmlvo, NULL,
++				(KbdCtrlProcPtr)NoopDDA);
++			break;
++		}
++		case DEVICE_ON:
++			pDevice->public_.on = TRUE;
++			break;
++		case DEVICE_OFF:
++			pDevice->public_.on = FALSE;
++			break;
++		case DEVICE_CLOSE:
++			break;
++	}
++	return Success;
++}
++
++
++static int
++vPointerProc(DeviceIntPtr pDevice, int onoff)
++{
++#define NBUTTONS 7
++#define NAXES 4
++
++	switch (onoff) {
++		case DEVICE_INIT:
++		{
++			BYTE map[NBUTTONS + 1];
++			Atom btn_labels[NBUTTONS] = { 0 };
++			Atom axes_labels[NAXES] = { 0 };
++
++			// 4-7 are the wheel buttons.
++			for (int i = 1; i <= NBUTTONS; i++)
++				map[i] = i;
++
++			btn_labels[0] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_LEFT);
++			btn_labels[1] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_MIDDLE);
++			btn_labels[2] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_RIGHT);
++			btn_labels[3] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_WHEEL_UP);
++			btn_labels[4] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_WHEEL_DOWN);
++			btn_labels[5] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_HWHEEL_LEFT);
++			btn_labels[6] = XIGetKnownProperty(BTN_LABEL_PROP_BTN_HWHEEL_RIGHT);
++
++			axes_labels[0] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_X);
++			axes_labels[1] = XIGetKnownProperty(AXIS_LABEL_PROP_ABS_Y);
++			axes_labels[2] = XIGetKnownProperty(AXIS_LABEL_PROP_REL_VSCROLL);
++			axes_labels[3] = XIGetKnownProperty(AXIS_LABEL_PROP_REL_HSCROLL);
++
++			InitPointerDeviceStruct((DevicePtr)pDevice, map, NBUTTONS,
++				btn_labels, (PtrCtrlProcPtr)NoopDDA,
++				GetMotionHistorySize(), NAXES, axes_labels);
++
++			int maxX = gVScreen != NULL ? gVScreen->width - 1 : 16383;
++			int maxY = gVScreen != NULL ? gVScreen->height - 1 : 16383;
++			InitValuatorAxisStruct(pDevice, 0, axes_labels[0], 0, maxX,
++				0, 0, 0, Absolute);
++			InitValuatorAxisStruct(pDevice, 1, axes_labels[1], 0, maxY,
++				0, 0, 0, Absolute);
++			InitValuatorAxisStruct(pDevice, 2, axes_labels[2],
++				NO_AXIS_LIMITS, NO_AXIS_LIMITS, 1, 0, 1, Relative);
++			InitValuatorAxisStruct(pDevice, 3, axes_labels[3],
++				NO_AXIS_LIMITS, NO_AXIS_LIMITS, 1, 0, 1, Relative);
++			SetScrollValuator(pDevice, 2, SCROLL_TYPE_VERTICAL, 1.0,
++				SCROLL_FLAG_PREFERRED);
++			SetScrollValuator(pDevice, 3, SCROLL_TYPE_HORIZONTAL, 1.0,
++				SCROLL_FLAG_NONE);
++			break;
++		}
++		case DEVICE_ON:
++			pDevice->public_.on = TRUE;
++			break;
++		case DEVICE_OFF:
++			pDevice->public_.on = FALSE;
++			break;
++		case DEVICE_CLOSE:
++			break;
++	}
++	return Success;
++
++#undef NBUTTONS
++#undef NAXES
++}
++
++
++// V\OS input device ids and X device ids are separate spaces; slaves are
++// found through this table. Appended on the server thread only.
++struct VSlave {
++	int32			sourceId;
++	bool			pointer;
++	DeviceIntPtr	device;
++};
++static const int32 kMaxSlaves = 32;
++static VSlave sSlaves[kMaxSlaves];
++static int32 sSlaveCount = 0;
++
++
++// Recompiles the keymap from the current V\OS layout and applies it to
++// the master and every keyboard, so clients get a MappingNotify.
++void
++VReloadKeymap()
++{
++	if (inputInfo.keyboard == NULL)
++		return;
++
++	XkbRMLVOSet rmlvo;
++	memset(&rmlvo, 0, sizeof(rmlvo));
++	vFillRMLVO(&rmlvo);
++	XkbDescPtr desc = XkbCompileKeymap(inputInfo.keyboard, &rmlvo);
++	if (desc == NULL)
++		return;
++
++	XkbDeviceApplyKeymap(inputInfo.keyboard, desc);
++	int32 count = atomic_get(&sSlaveCount);
++	for (int32 i = 0; i < count; i++) {
++		if (!sSlaves[i].pointer && sSlaves[i].device != NULL)
++			XkbDeviceApplyKeymap(sSlaves[i].device, desc);
++	}
++	XkbFreeKeyboard(desc, XkbAllComponentsMask, TRUE);
++}
++
++
++static DeviceIntPtr
++vFindSlave(int32 sourceId, bool pointer)
++{
++	int32 count = atomic_get(&sSlaveCount);
++	for (int32 i = 0; i < count; i++) {
++		if (sSlaves[i].sourceId == sourceId && sSlaves[i].pointer == pointer)
++			return sSlaves[i].device;
++	}
++	return NULL;
++}
++
++
++static DeviceIntPtr
++vEnsureSlave(int32 deviceId, bool pointer, const char* name)
++{
++	// sPointerMaster/sKeyboardMaster are slaves themselves; new devices
++	// attach to the core masters.
++	DeviceIntPtr master = pointer ? inputInfo.pointer : inputInfo.keyboard;
++	if (master == NULL)
++		return NULL;
++
++	DeviceIntPtr existing = vFindSlave(deviceId, pointer);
++	if (existing != NULL)
++		return existing;
++	if (atomic_get(&sSlaveCount) >= kMaxSlaves)
++		return NULL;
++
++	DeviceIntPtr dev = AddInputDevice(serverClient,
++		pointer ? vPointerProc : vKeyboardProc, TRUE);
++	if (dev == NULL)
++		return NULL;
++
++	Atom type = MakeAtom(pointer ? XI_MOUSE : XI_KEYBOARD,
++		strlen(pointer ? XI_MOUSE : XI_KEYBOARD), TRUE);
++	char label[64];
++	snprintf(label, sizeof(label), "%s %d",
++		pointer ? "Vitruvian pointer" : "Vitruvian keyboard",
++		(int)deviceId);
++	AssignTypeAndName(dev, type, label);
++
++	// Devices added after startup are not enabled for us.
++	if (ActivateDevice(dev, TRUE) != Success || !EnableDevice(dev, TRUE))
++		return NULL;
++
++	AttachDevice(serverClient, dev, master);
++
++	int32 index = atomic_get(&sSlaveCount);
++	sSlaves[index].sourceId = deviceId;
++	sSlaves[index].pointer = pointer;
++	sSlaves[index].device = dev;
++	atomic_add(&sSlaveCount, 1);
++	return dev;
++}
++
++
++static void
++vQueueDevice(int32 deviceId, bool pointer, const char* name)
++{
++	if (sPendingLock < B_OK)
++		return;
++	if (acquire_sem(sPendingLock) != B_OK)
++		return;
++
++	// Already present?
++	for (VInputDevice* entry = sPendingDevices; entry != NULL;
++			entry = entry->next) {
++		if (entry->id == deviceId && entry->pointer == pointer) {
++			release_sem(sPendingLock);
++			return;
++		}
++	}
++
++	VInputDevice* entry = new(std::nothrow) VInputDevice;
++	if (entry == NULL) {
++		release_sem(sPendingLock);
++		return;
++	}
++	entry->id = deviceId;
++	entry->pointer = pointer;
++	snprintf(entry->name, sizeof(entry->name), "%s",
++		name != NULL ? name : "Vitruvian input");
++	entry->next = sPendingDevices;
++	sPendingDevices = entry;
++	release_sem(sPendingLock);
++
++	// VDrainInputPort runs on the server thread and creates the device.
++	VWakeServer();
++}
++
++
++//	#pragma mark - event conversion
++
++
++static int32
++vXButton(int32 legacyBit)
++{
++	switch (legacyBit) {
++		case 0x1:
++			return 1;
++		case 0x2:
++			return 3;
++		case 0x4:
++			return 2;
++		default:
++			// Extra buttons follow the wheel range: bit 3 is button 8.
++			return (int32)__builtin_ctz((uint32)legacyBit) + 5;
++	}
++}
++
++
++// Reverse of the hybrid contract for synthetic releases that arrive
++// without be:evdev_code; covers the well-known legacy codes only.
++static uint32
++vLegacyToEvdev(uint32 legacy)
++{
++	static const struct {
++		uint32	legacy;
++		uint32	evdev;
++	} kMap[] = {
++		{ 0x01, 0x01 }, { 0x02, 0x3b }, { 0x03, 0x3c }, { 0x04, 0x3d },
++		{ 0x05, 0x3e }, { 0x06, 0x3f }, { 0x07, 0x40 }, { 0x08, 0x41 },
++		{ 0x09, 0x42 }, { 0x0a, 0x43 }, { 0x0b, 0x44 }, { 0x0c, 0x57 },
++		{ 0x0d, 0x58 }, { 0x0e, 0x63 }, { 0x0f, 0x46 }, { 0x10, 0x77 },
++		{ 0x11, 0x29 }, { 0x1e, 0x0e }, { 0x1f, 0x6e }, { 0x20, 0x66 },
++		{ 0x21, 0x68 }, { 0x22, 0x45 }, { 0x26, 0x0f }, { 0x34, 0x6f },
++		{ 0x35, 0x6b }, { 0x36, 0x6d }, { 0x3b, 0x3a }, { 0x47, 0x1c },
++		{ 0x4b, 0x2a }, { 0x56, 0x36 }, { 0x57, 0x67 }, { 0x5b, 0x60 },
++		{ 0x5c, 0x1d }, { 0x5d, 0x38 }, { 0x5e, 0x39 }, { 0x5f, 0x64 },
++		{ 0x60, 0x61 }, { 0x61, 0x69 }, { 0x62, 0x6c }, { 0x63, 0x6a },
++		{ 0x66, 0x7d }, { 0x67, 0x7e },
++	};
++
++	for (size_t i = 0; i < sizeof(kMap) / sizeof(kMap[0]); i++) {
++		if (kMap[i].legacy == legacy)
++			return kMap[i].evdev;
++	}
++	return 0;
++}
++
++
++static DeviceIntPtr
++vSourceDevice(const BMessage& msg, bool pointer)
++{
++	DeviceIntPtr dev = pointer ? sPointerMaster : sKeyboardMaster;
++	int32 sourceId = -1;
++	if (msg.FindInt32("be:device_id", &sourceId) != B_OK || sourceId < 0)
++		return dev;
++
++	const char* name = NULL;
++	msg.FindString("be:device_name", &name);
++	DeviceIntPtr slave = vFindSlave(sourceId, pointer);
++	if (slave != NULL)
++		return slave;
++
++	// Created on the server thread; the master carries events until then.
++	vQueueDevice(sourceId, pointer, name);
++	return dev;
++}
++
++
++static void
++vHandleKey(const BMessage& msg)
++{
++	if (sKeyboardMaster == NULL)
++		return;
++
++	int32 evdevCode = -1;
++	if (msg.FindInt32("be:evdev_code", &evdevCode) != B_OK) {
++		int32 hybrid = 0;
++		if (msg.FindInt32("key", &hybrid) != B_OK)
++			return;
++		if (hybrid >= 0x80)
++			evdevCode = hybrid;
++		else
++			evdevCode = (int32)vLegacyToEvdev((uint32)hybrid);
++	}
++	if (evdevCode <= 0)
++		return;
++
++	// X keycodes are the xkb space: evdev code + 8, the same rule
++	// input_server's xkbcommon state uses.
++	int32 keycode = evdevCode + 8;
++
++	DeviceIntPtr dev = vSourceDevice(msg, false);
++
++	int type = 0;
++	switch (msg.what) {
++		case B_KEY_DOWN:
++		case B_UNMAPPED_KEY_DOWN:
++			type = KeyPress;
++			break;
++		case B_KEY_UP:
++		case B_UNMAPPED_KEY_UP:
++			type = KeyRelease;
++			break;
++		default:
++			return;
++	}
++
++	input_lock();
++	QueueKeyboardEvents(dev, type, keycode);
++	input_unlock();
++	vPokeEQ();
++}
++
++
++static void
++vHandlePointer(const BMessage& msg)
++{
++	if (sPointerMaster == NULL)
++		return;
++
++	DeviceIntPtr dev = vSourceDevice(msg, true);
++
++	// Window messages carry the seat position as screen_where.
++	BPoint where;
++	bool hasWhere = msg.FindPoint("screen_where", &where) == B_OK
++		|| msg.FindPoint("where", &where) == B_OK;
++
++	switch (msg.what) {
++		case B_MOUSE_MOVED:
++		{
++			// Every surface listens to all pointer motion; send each
++			// position once.
++			if (!hasWhere || where == sLastWhere)
++				return;
++			sLastWhere = where;
++
++			ValuatorMask mask;
++			valuator_mask_zero(&mask);
++			valuator_mask_set_double(&mask, 0, where.x);
++			valuator_mask_set_double(&mask, 1, where.y);
++
++			input_lock();
++			QueuePointerEvents(dev, MotionNotify, 0,
++				POINTER_ABSOLUTE
++					| (atomic_get(&sTapRaw) != 0 ? POINTER_NORAW : 0), &mask);
++			input_unlock();
++			vPokeEQ();
++			break;
++		}
++		case B_MOUSE_DOWN:
++		case B_MOUSE_UP:
++		{
++			int32 buttons = 0;
++			msg.FindInt32("buttons", &buttons);
++			// Listener copies reach every surface; only the surface under
++			// the pointer (it carries _view_token) starts a press, so a click
++			// on a native window above never reaches X. Releases always pass.
++			if (msg.what == B_MOUSE_DOWN && sLastButtons == 0
++				&& !msg.HasInt32("_view_token")) {
++				return;
++			}
++			uint32 changed = (uint32)buttons ^ sLastButtons;
++			sLastButtons = (uint32)buttons;
++
++			input_lock();
++			for (int32 bit = 0; bit < 8; bit++) {
++				if ((changed & (1 << bit)) == 0)
++					continue;
++				int type = (buttons & (1 << bit)) != 0
++					? ButtonPress : ButtonRelease;
++				QueuePointerEvents(dev, type, vXButton(1 << bit), 0,
++					NULL);
++			}
++			input_unlock();
++			vPokeEQ();
++			break;
++		}
++		case B_MOUSE_WHEEL_CHANGED:
++		{
++			float wheelX = 0;
++			float wheelY = 0;
++			msg.FindFloat("be:wheel_delta_x", &wheelX);
++			msg.FindFloat("be:wheel_delta_y", &wheelY);
++
++			input_lock();
++			if (wheelY > 0) {
++				QueuePointerEvents(dev, ButtonPress, 5, 0, NULL);
++				QueuePointerEvents(dev, ButtonRelease, 5, 0, NULL);
++			} else if (wheelY < 0) {
++				QueuePointerEvents(dev, ButtonPress, 4, 0, NULL);
++				QueuePointerEvents(dev, ButtonRelease, 4, 0, NULL);
++			}
++			if (wheelX > 0) {
++				QueuePointerEvents(dev, ButtonPress, 7, 0, NULL);
++				QueuePointerEvents(dev, ButtonRelease, 7, 0, NULL);
++			} else if (wheelX < 0) {
++				QueuePointerEvents(dev, ButtonPress, 6, 0, NULL);
++				QueuePointerEvents(dev, ButtonRelease, 6, 0, NULL);
++			}
++			input_unlock();
++			vPokeEQ();
++			break;
++		}
++		default:
++			break;
++	}
++}
++
++
++// XI2 raw motion: the pre-acceleration deltas the device add-ons attach
++// and the tap forwards; games and canvas apps read the raw event.
++static void
++vHandleRawMotion(const BMessage& msg)
++{
++	if (msg.what != B_MOUSE_MOVED || sPointerMaster == NULL)
++		return;
++
++	float rawX = 0;
++	float rawY = 0;
++	if (msg.FindFloat("be:raw_delta_x", &rawX) != B_OK
++		&& msg.FindFloat("be:raw_delta_y", &rawY) != B_OK) {
++		return;
++	}
++
++	atomic_set(&sTapRaw, 1);
++	// This runs on the tap thread; slave devices belong to the server
++	// thread, the master pointer is always there.
++	DeviceIntPtr dev = sPointerMaster;
++
++	RawDeviceEvent raw;
++	memset(&raw, 0, sizeof(raw));
++	raw.header = ET_Internal;
++	raw.type = ET_RawMotion;
++	raw.length = sizeof(raw);
++	raw.time = GetTimeInMillis();
++	raw.deviceid = dev->id;
++	raw.sourceid = dev->id;
++	raw.valuators.mask[0] |= 1 << 0;
++	raw.valuators.mask[1] |= 1 << 1;
++	raw.valuators.data[0] = rawX;
++	raw.valuators.data[1] = rawY;
++	raw.valuators.data_raw[0] = rawX;
++	raw.valuators.data_raw[1] = rawY;
++
++	input_lock();
++	mieqEnqueue(dev, (InternalEvent*)&raw);
++	input_unlock();
++	vPokeEQ();
++}
++
++
++static void
++vHandleEvent(const BMessage& msg)
++{
++	switch (msg.what) {
++		case B_KEY_DOWN:
++		case B_KEY_UP:
++		case B_UNMAPPED_KEY_DOWN:
++		case B_UNMAPPED_KEY_UP:
++			vHandleKey(msg);
++			break;
++		case B_MOUSE_MOVED:
++		case B_MOUSE_DOWN:
++		case B_MOUSE_UP:
++		case B_MOUSE_WHEEL_CHANGED:
++			vHandlePointer(msg);
++			break;
++		default:
++			break;
++	}
++}
++
++
++//	#pragma mark - server thread side
++
++
++// Called on the server thread from the surface notify fd; events still go
++// through the input lock and the event queue.
++void
++VHandleWindowInput(const BMessage& msg)
++{
++	vHandleEvent(msg);
++}
++
++
++void
++VDrainInputPort()
++{
++	// Pull pending XI2 slave devices on the server thread; the input
++	// thread only queues their identities.
++	if (sPendingLock < B_OK)
++		return;
++	if (acquire_sem(sPendingLock) != B_OK)
++		return;
++
++	VInputDevice* entry = sPendingDevices;
++	sPendingDevices = NULL;
++	release_sem(sPendingLock);
++
++	while (entry != NULL) {
++		VInputDevice* next = entry->next;
++		vEnsureSlave(entry->id, entry->pointer, entry->name);
++		delete entry;
++		entry = next;
++	}
++}
++
++
++// A popup's grab never sees clicks on app_server chrome or other V\OS
++// windows; synthesize the outside click toolkits close menus on.
++static void
++vBreakPopupGrabs()
++{
++	DeviceIntPtr pointer = inputInfo.pointer;
++	if (pointer != NULL && pointer->deviceGrab.grab != NULL) {
++		WindowPtr grabWin = pointer->deviceGrab.grab->window;
++		if (grabWin != NULL && grabWin->overrideRedirect) {
++			QueuePointerEvents(pointer, ButtonPress, 1, 0, NULL);
++			QueuePointerEvents(pointer, ButtonRelease, 1, 0, NULL);
++		}
++	}
++
++	DeviceIntPtr keyboard = inputInfo.keyboard;
++	if (keyboard != NULL && keyboard->deviceGrab.grab != NULL) {
++		WindowPtr grabWin = keyboard->deviceGrab.grab->window;
++		if (grabWin != NULL && grabWin->overrideRedirect)
++			(*keyboard->deviceGrab.DeactivateGrab)(keyboard);
++	}
++}
++
++
++void
++VSetWindowFocus(uint32 windowId, bool activated)
++{
++	ScreenPtr pScreen = gVScreen;
++	if (pScreen == NULL)
++		return;
++
++	vBreakPopupGrabs();
++
++	if (activated) {
++		WindowPtr pWin = VWindowForId(windowId);
++		if (pWin == NULL)
++			return;
++		SetInputFocus(serverClient, inputInfo.keyboard, pWin->drawable.id,
++			RevertToPointerRoot, currentTime.milliseconds, FALSE);
++		atomic_set(&gVFocusWindowId, (int32)windowId);
++	} else if ((uint32)atomic_get(&gVFocusWindowId) == windowId) {
++		SetInputFocus(serverClient, inputInfo.keyboard,
++			pScreen->root->drawable.id,
++			RevertToPointerRoot, currentTime.milliseconds, FALSE);
++		atomic_set(&gVFocusWindowId, 0);
++	}
++
++	VSetFocusViewCursor();
++}
++
++
++void
++VSetFocusViewCursor()
++{
++	// Cursor image translation is app_server's; X-side cursor shapes
++	// only restore or hide the seat cursor on the focused window until
++	// the image bridge lands with the input lane follow-up.
++	uint32 focusId = (uint32)atomic_get(&gVFocusWindowId);
++	if (focusId == 0)
++		return;
++
++	WindowPtr pWin = VWindowForId(focusId);
++	VWindowPriv* priv = VWindowPrivFor(pWin);
++	if (priv == NULL || priv->surface == NULL)
++		return;
++}
++
++
++//	#pragma mark - input thread
++
++
++static int32
++vInputThreadFunc(void* /*data*/)
++{
++	uint8 buffer[4096];
++
++	while (atomic_get(&sInputQuit) == 0) {
++		port_id port = gVInputPort;
++		if (port < B_OK) {
++			port = find_port(XVITRUVIAN_INPUT_PORT_NAME);
++			if (port < B_OK) {
++				snooze(50 * 1000);
++				continue;
++			}
++			gVInputPort = port;
++		}
++
++		int32 code = 0;
++		ssize_t size = read_port_etc(port, &code, buffer, sizeof(buffer),
++			B_RELATIVE_TIMEOUT, 100 * 1000);
++		if (size == B_BAD_PORT_ID || size == B_BAD_VALUE) {
++			// Stale id; look the port up again. The tap is optional.
++			gVInputPort = -1;
++			continue;
++		}
++		if (size <= 0)
++			continue;
++
++		BMessage msg;
++		if (msg.Unflatten((const char*)buffer) == B_OK)
++			vHandleRawMotion(msg);
++	}
++
++	return 0;
++}
++
++
++void
++VStartInputThread()
++{
++	if (sPendingLock < B_OK)
++		sPendingLock = create_sem(1, "xvitruvian input devices");
++
++	gVInputPort = create_port(256, XVITRUVIAN_INPUT_PORT_NAME);
++	if (gVInputPort < B_OK)
++		gVInputPort = -1;
++
++	if (sInputThread < B_OK) {
++		atomic_set(&sInputQuit, 0);
++		sInputThread = spawn_thread(vInputThreadFunc, "xv input",
++			B_URGENT_DISPLAY_PRIORITY, NULL);
++		if (sInputThread >= B_OK)
++			resume_thread(sInputThread);
++	}
++}
++
++
++void
++VStopInputThread()
++{
++	if (atomic_get_and_set(&sInputQuit, 1) == 0 && sInputThread >= B_OK) {
++		int32 status;
++		wait_for_thread(sInputThread, &status);
++	}
++	sInputThread = -1;
++}
++
++
++extern "C" void
++InitInput(int argc, char* argv[])
++{
++	VInitInputDevices(argc, argv);
++}
++
++
++extern "C" void
++CloseInput(void)
++{
++	VStopInputThread();
++	mieqFini();
++}
++
++
++extern "C" void
++ProcessInputEvents(void)
++{
++	mieqProcessInputEvents();
++}
++
++
++extern "C" void
++DDXRingBell(int /*volume*/, int /*pitch*/, int /*duration*/)
++{
++}
++
++
++void
++VInitInputDevices(int /*argc*/, char** /*argv*/)
++{
++	if (AllocDevicePair(serverClient, "Vitruvian", &sPointerMaster,
++			&sKeyboardMaster, vPointerProc, vKeyboardProc, FALSE)
++			!= Success) {
++		FatalError("XVitruvian: cannot allocate input devices\n");
++	}
++
++	mieqInit();
++	VStartInputThread();
++}
+diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vPriv.h
+@@ -0,0 +1,206 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Shared state for the XVitruvian DDX. The X server main thread owns
++// everything X, windows included; only the application and input threads
++// enqueue server ops and wake it through the notify pipe.
++
++#ifndef _V_PRIV_H
++#define _V_PRIV_H
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++// glibc already has reallocarray; the server's prototype then clashes.
++#ifndef HAVE_REALLOCARRAY
++#define HAVE_REALLOCARRAY 1
++#endif
++
++// misc.h defines min/max macros and pulls C headers whose libstdc++
++// wrappers expand into C++ templates; every standard header must be in
++// place before the class/public rename below rewrites any of it.
++#include <algorithm>
++#include <cassert>
++#include <cctype>
++#include <cerrno>
++#include <clocale>
++#include <cmath>
++#include <cstddef>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <ctime>
++#include <iterator>
++#include <limits>
++#include <map>
++#include <memory>
++#include <new>
++#include <vector>
++
++#include <X11/X.h>
++#include <X11/Xproto.h>
++
++// X.Org struct members that are C++ keywords; renamed for this tree.
++// The server headers also lack extern "C" guards, and the DIX objects
++// are C, so the whole block is wrapped.
++#define class class_
++#define public public_
++extern "C" {
++#include "privates.h"
++#include "scrnintstr.h"
++#include "inputstr.h"
++#include "input.h"
++#include "exevents.h"
++#include "events.h"
++#include "eventstr.h"
++#include "inpututils.h"
++#include "callback.h"
++#include "mi.h"
++#include "mipointer.h"
++#include "micmap.h"
++#include "fb.h"
++#include "dix.h"
++#include "dixstruct.h"
++#include "windowstr.h"
++#include "compint.h"
++#include "property.h"
++#include "selection.h"
++#include "propertyst.h"
++#include "regionstr.h"
++#include "randrstr.h"
++#include "damage.h"
++#include "opaque.h"
++#include "os.h"
++#include "xserver-properties.h"
++}
++#undef public
++#undef class
++
++#include <OS.h>
++
++
++class BBitmap;
++class BMessage;
++class OutputAddonClient;
++class XVApp;
++namespace BPrivate {
++	class BSurface;
++}
++using BPrivate::BSurface;
++
++
++enum {
++	kVOpScreenChanged	= 1,
++	kVOpClipboardChanged,
++	kVOpKeymapChanged,
++	kVOpSettingsChanged,
++	kVOpSetTeam,
++};
++
++struct VOp {
++	uint32		what;
++	uint32		windowId;
++	int32		i0;
++	int32		i1;
++	int32		i2;
++	int32		i3;
++};
++
++struct VWindowPriv {
++	BSurface*	surface;
++	int			fd;
++	void*		damage;
++	Window		xWindow;
++	bool		topLevel;
++	bool		mapped;
++	bool		dirty;
++	bool		zoomed;
++	bool		fullscreen;
++	int32		restoreX;
++	int32		restoreY;
++	int32		restoreWidth;
++	int32		restoreHeight;
++	int32		x;
++	int32		y;
++	int32		width;
++	int32		height;
++	uint32		serial;
++};
++
++
++// vInit.cpp
++extern DevPrivateKeyRec gVWindowPrivateKeyRec;
++#define gVWindowPrivateKey (&gVWindowPrivateKeyRec)
++extern ScreenPtr	gVScreen;
++extern XVApp*		gVApp;
++extern OutputAddonClient* gVAddon;
++extern int		gVInputPort;
++extern int		gVWakeRead;
++extern int		gVWakeWrite;
++extern int32		gVFocusWindowId;
++
++void			VEnqueueOp(const VOp& op);
++void			VWakeServer();
++void			VProcessOps();
++
++VWindowPriv*		VWindowPrivFor(WindowPtr pWin);
++void			VResizeValuators(ScreenPtr pScreen);
++void			VResizeScreen(int width, int height);
++void			VPostWindowPid(uint32 windowId, int32 pid);
++void			VPostWindowGone(uint32 windowId);
++
++// vWindow.cpp
++void			VSetupWindowManager();
++Bool			VCreateWindow(WindowPtr pWin);
++Bool			VDestroyWindow(WindowPtr pWin);
++Bool			VRealizeWindow(WindowPtr pWin);
++Bool			VUnrealizeWindow(WindowPtr pWin);
++Bool			VPositionWindow(WindowPtr pWin, int x, int y);
++Bool			VChangeWindowAttributes(WindowPtr pWin, unsigned long mask);
++void			VWindowPropertyChanged(WindowPtr pWin, Atom prop);
++void			VSyncWindowTitle(VWindowPriv* priv);
++void			VApplyWindowState(VWindowPriv* priv);
++void			VSendDeleteWindow(WindowPtr pWin);
++void			VSyncWindowFrame(VWindowPriv* priv);
++void			VUploadWindowDamage(VWindowPriv* priv, int x1, int y1,
++				int x2, int y2);
++WindowPtr		VWindowForId(uint32 id);
++void			VWindowSetTeam(uint32 windowId, team_id team);
++void			VWindowAttribute(WindowPtr pWin);
++
++// vInput.cpp
++void			VInitInputDevices(int argc, char* argv[]);
++void			VStartInputThread();
++void			VReloadKeymap();
++void			VKeymapRefresh();
++
++// vClipboard.cpp
++void			VClipboardInit();
++void			VClipboardChanged();
++void			VClipboardPropertyChanged(WindowPtr pWin, PropertyPtr prop,
++				int state);
++WindowPtr		VClipboardWindow();
++void			VSelectionTake(Atom selection);
++void			VSelectionRelease(Atom selection);
++
++// vDnd.cpp
++void			VDndInit();
++void			VDndPointerMoved(const BMessage& event);
++void			VDndDropped(const BMessage& event);
++bool			VDndSendEvent(xEvent* event);
++bool			VDndConvert(Atom target, WindowPtr pWin, Atom property);
++
++// vSettings.cpp
++void			VSettingsUpdate();
++void			VSettingsRefresh();
++void			VStopInputThread();
++void			VDrainInputPort();
++void			VSetWindowFocus(uint32 windowId, bool activated);
++void			VSetFocusViewCursor();
++void			VHandleWindowInput(const BMessage& msg);
++
++#endif	// _V_PRIV_H
+diff --git a/hw/vitruvian/vSettings.cpp b/hw/vitruvian/vSettings.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vSettings.cpp
+@@ -0,0 +1,270 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// V\OS UI settings for X clients: the XSETTINGS manager for GTK and Qt
++// plus RESOURCE_MANAGER for Xft and Xcursor.
++
++#include <dix-config.h>
++
++#include "vPriv.h"
++
++#include <X11/Xatom.h>
++
++#include <Autolock.h>
++#include <Font.h>
++#include <Locker.h>
++#include <InterfaceDefs.h>
++#include <String.h>
++
++#include <stdio.h>
++#include <string.h>
++
++
++
++void _init_global_fonts_();
++
++static const int kDpi = 96;
++static const int kCursorSize = 24;
++
++static WindowPtr sOwner = NULL;
++static uint32 sSerial = 0;
++
++
++static Atom
++vSettingAtom(const char* name)
++{
++	return MakeAtom(name, strlen(name), TRUE);
++}
++
++
++//	#pragma mark - XSETTINGS
++
++
++static void
++vPad(std::vector<uint8>& out)
++{
++	while (out.size() % 4 != 0)
++		out.push_back(0);
++}
++
++
++static void
++vPut32(std::vector<uint8>& out, uint32 value)
++{
++	for (int i = 0; i < 4; i++)
++		out.push_back((value >> (8 * i)) & 0xff);
++}
++
++
++static void
++vPutName(std::vector<uint8>& out, uint8 type, const char* name)
++{
++	size_t length = strlen(name);
++	out.push_back(type);
++	out.push_back(0);
++	out.push_back(length & 0xff);
++	out.push_back((length >> 8) & 0xff);
++	out.insert(out.end(), name, name + length);
++	vPad(out);
++	vPut32(out, sSerial);
++}
++
++
++static void
++vPutInt(std::vector<uint8>& out, const char* name, uint32 value)
++{
++	vPutName(out, 0, name);
++	vPut32(out, value);
++}
++
++
++static void
++vPutString(std::vector<uint8>& out, const char* name, const char* value)
++{
++	vPutName(out, 1, name);
++	size_t length = strlen(value);
++	vPut32(out, length);
++	out.insert(out.end(), value, value + length);
++	vPad(out);
++}
++
++
++static BLocker sCacheLock("xv settings");
++static BString sCachedFont("Sans 10");
++static bool sCachedDark = false;
++
++
++// Runs on the application thread: font and color queries talk to
++// app_server and must never run on the X thread.
++void
++VSettingsRefresh()
++{
++	_init_global_fonts_();
++
++	font_family family;
++	font_style style;
++	be_plain_font->GetFamilyAndStyle(&family, &style);
++	BString font;
++	font.SetToFormat("%s %d", family, (int)(be_plain_font->Size() + 0.5f));
++
++	rgb_color background = ui_color(B_PANEL_BACKGROUND_COLOR);
++	bool dark = (background.red * 299 + background.green * 587
++		+ background.blue * 114) / 1000 < 128;
++
++	BAutolock locker(sCacheLock);
++	sCachedFont = font;
++	sCachedDark = dark;
++}
++
++
++static void
++vReadSettings(BString& font, bool& dark)
++{
++	BAutolock locker(sCacheLock);
++	font = sCachedFont;
++	dark = sCachedDark;
++}
++
++
++static void
++vPublishXSettings(const BString& font, bool dark)
++{
++	std::vector<uint8> data;
++	data.push_back(0);	// LSBFirst
++	data.push_back(0);
++	data.push_back(0);
++	data.push_back(0);
++	vPut32(data, sSerial);
++	vPut32(data, 8);
++
++	vPutInt(data, "Xft/DPI", kDpi * 1024);
++	vPutInt(data, "Xft/Antialias", 1);
++	vPutInt(data, "Xft/Hinting", 1);
++	vPutString(data, "Xft/HintStyle", "hintslight");
++	vPutString(data, "Xft/RGBA", "none");
++	vPutString(data, "Gtk/FontName", font.String());
++	vPutString(data, "Net/ThemeName", dark ? "Adwaita-dark" : "Adwaita");
++	vPutInt(data, "Gtk/CursorThemeSize", kCursorSize);
++
++	Atom property = vSettingAtom("_XSETTINGS_SETTINGS");
++	dixChangeWindowProperty(serverClient, sOwner, property, property, 8,
++		PropModeReplace, data.size(), data.data(), TRUE);
++}
++
++
++//	#pragma mark - RESOURCE_MANAGER
++
++
++static void
++vPublishResources(WindowPtr root)
++{
++	static const char* const kKeys[] = {
++		"Xft.dpi:", "Xft.antialias:", "Xft.hinting:", "Xft.hintstyle:",
++		"Xft.rgba:", "Xcursor.size:"
++	};
++
++	// Merge like xrdb: keep every entry that is not ours.
++	BString result;
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, root, XA_RESOURCE_MANAGER, serverClient,
++			DixReadAccess) == Success && prop != NULL && prop->format == 8
++		&& prop->size > 0) {
++		BString old((const char*)prop->data, prop->size);
++		int32 start = 0;
++		while (start < old.Length()) {
++			int32 end = old.FindFirst('\n', start);
++			if (end < 0)
++				end = old.Length();
++			BString line;
++			old.CopyInto(line, start, end - start);
++			start = end + 1;
++
++			bool ours = false;
++			for (size_t i = 0; i < sizeof(kKeys) / sizeof(kKeys[0]); i++) {
++				if (line.FindFirst(kKeys[i]) == 0)
++					ours = true;
++			}
++			if (!ours && line.Length() > 0)
++				result << line << "\n";
++		}
++	}
++
++	result << "Xft.dpi:\t" << (int32)kDpi << "\n"
++		<< "Xft.antialias:\t1\n"
++		<< "Xft.hinting:\t1\n"
++		<< "Xft.hintstyle:\thintslight\n"
++		<< "Xft.rgba:\tnone\n"
++		<< "Xcursor.size:\t" << (int32)kCursorSize << "\n";
++
++	dixChangeWindowProperty(serverClient, root, XA_RESOURCE_MANAGER,
++		XA_STRING, 8, PropModeReplace, result.Length(),
++		(void*)result.String(), TRUE);
++}
++
++
++//	#pragma mark - entry points
++
++
++// Takes the _XSETTINGS_S0 selection once; later calls only republish.
++void
++VSettingsUpdate()
++{
++	if (gVScreen == NULL || gVScreen->root == NULL)
++		return;
++
++	WindowPtr root = gVScreen->root;
++	BString font;
++	bool dark;
++	vReadSettings(font, dark);
++
++	if (sOwner == NULL) {
++		int error = 0;
++		sOwner = CreateWindow(FakeClientID(0), root, -1, -1, 1, 1, 0,
++			InputOnly, 0, NULL, 0, serverClient, CopyFromParent, &error);
++		if (sOwner == NULL)
++			return;
++		if (!AddResource(sOwner->drawable.id, RT_WINDOW, sOwner)) {
++			sOwner = NULL;
++			return;
++		}
++	}
++
++	sSerial++;
++	vPublishXSettings(font, dark);
++	vPublishResources(root);
++
++	Atom selection = vSettingAtom("_XSETTINGS_S0");
++	Selection* pSel = NULL;
++	if (dixLookupSelection(&pSel, selection, serverClient,
++			DixSetAttrAccess) == Success && pSel->pWin == sOwner)
++		return;
++
++	if (pSel == NULL) {
++		pSel = dixAllocateObjectWithPrivates(Selection, PRIVATE_SELECTION);
++		if (pSel == NULL)
++			return;
++		pSel->selection = selection;
++		pSel->next = CurrentSelections;
++		CurrentSelections = pSel;
++	}
++	UpdateCurrentTime();
++	pSel->lastTimeChanged = currentTime;
++	pSel->window = sOwner->drawable.id;
++	pSel->pWin = sOwner;
++	pSel->client = NullClient;
++
++	// Announce the manager to clients that are already running.
++	xEvent event;
++	memset(&event, 0, sizeof(event));
++	event.u.u.type = ClientMessage;
++	event.u.u.detail = 32;
++	event.u.clientMessage.window = root->drawable.id;
++	event.u.clientMessage.u.l.type = vSettingAtom("MANAGER");
++	event.u.clientMessage.u.l.longs0 = currentTime.milliseconds;
++	event.u.clientMessage.u.l.longs1 = selection;
++	event.u.clientMessage.u.l.longs2 = sOwner->drawable.id;
++	DeliverEventsToWindow(PickPointer(serverClient), root, &event, 1,
++		StructureNotifyMask, NullGrab);
++}
+diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vWindow.cpp
+@@ -0,0 +1,981 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Rootless window lane: every realized X toplevel owns a BSurface. Damage
++// on the X pixmap is copied into the surface buffer and presented; the
++// surface events arrive on a notify fd, so all of it runs on the server
++// thread.
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include "vPriv.h"
++
++#include <X11/Xatom.h>
++
++#include <AppDefs.h>
++#include <Bitmap.h>
++#include <Message.h>
++#include <Point.h>
++#include <Rect.h>
++#include <Screen.h>
++#include <String.h>
++#include <Surface.h>
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++
++#include <new>
++
++
++static int32 sWindowSerial = 0;
++
++
++// misc.h defines min/max macros that break the std versions.
++static inline int32
++vMaxI(int32 a, int32 b)
++{
++	return a > b ? a : b;
++}
++
++
++static inline int32
++vMinI(int32 a, int32 b)
++{
++	return a < b ? a : b;
++}
++
++
++static Atom
++vAtom(const char* name)
++{
++	return MakeAtom(name, strlen(name), FALSE);
++}
++
++
++static WindowPtr
++vLookupWindow(Window window)
++{
++	WindowPtr pWin = NULL;
++	if (dixLookupWindow(&pWin, window, serverClient, DixReadAccess)
++			!= Success)
++		return NULL;
++	return pWin;
++}
++
++
++static VWindowPriv*
++vPriv(WindowPtr pWin)
++{
++	if (pWin == NULL)
++		return NULL;
++	return (VWindowPriv*)dixGetPrivate(&pWin->devPrivates,
++		gVWindowPrivateKey);
++}
++
++
++// _NET_WM_PID when the client set one, else the connection's peer.
++static pid_t
++vClientPid(WindowPtr pWin)
++{
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, pWin, vAtom("_NET_WM_PID"), serverClient,
++			DixReadAccess) == Success && prop != NULL && prop->format == 32
++		&& prop->size >= 1 && prop->type == XA_CARDINAL) {
++		pid_t pid = (pid_t)(*(CARD32*)prop->data);
++		if (pid > 1)
++			return pid;
++	}
++	return GetClientPid(wClient(pWin));
++}
++
++
++// Hands the window's pid to the app thread, which resolves the team.
++void
++VWindowAttribute(WindowPtr pWin)
++{
++	pid_t pid = vClientPid(pWin);
++	if (pid > 0)
++		VPostWindowPid((uint32)pWin->drawable.id, (int32)pid);
++}
++
++
++void
++VWindowSetTeam(uint32 windowId, team_id team)
++{
++	VWindowPriv* priv = vPriv(vLookupWindow((Window)windowId));
++	if (priv != NULL && priv->surface != NULL && team > 0)
++		priv->surface->SetTeam(team);
++}
++
++
++VWindowPriv*
++VWindowPrivFor(WindowPtr pWin)
++{
++	return vPriv(pWin);
++}
++
++
++WindowPtr
++VWindowForId(uint32 id)
++{
++	return vLookupWindow((Window)id);
++}
++
++
++// Reads an atom-list property into outAtoms; returns the item count or
++// -1 when the property is absent or of the wrong type.
++static int
++vReadAtomList(WindowPtr pWin, Atom property, Atom* outAtoms, int maxAtoms)
++{
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, pWin, property, serverClient,
++			DixReadAccess) != Success || prop == NULL)
++		return -1;
++	if (prop->type != XA_ATOM || prop->format != 32)
++		return -1;
++
++	int count = (int)prop->size;
++	if (count > maxAtoms)
++		count = maxAtoms;
++	memcpy(outAtoms, prop->data, (size_t)count * sizeof(Atom));
++	return count;
++}
++
++
++static bool
++vWindowHasAtom(WindowPtr pWin, Atom property, Atom wanted)
++{
++	Atom atoms[64];
++	int count = vReadAtomList(pWin, property, atoms, 64);
++	for (int i = 0; i < count; i++) {
++		if (atoms[i] == wanted)
++			return true;
++	}
++	return false;
++}
++
++
++// Rounds a size to the client's WM_NORMAL_HINTS steps and minimum, as a
++// window manager does, so clients like terminals don't snap it back.
++static void
++vApplySizeHints(WindowPtr pWin, int32* width, int32* height)
++{
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, pWin, XA_WM_NORMAL_HINTS, serverClient,
++			DixReadAccess) != Success || prop == NULL || prop->format != 32
++		|| prop->size < 15) {
++		return;
++	}
++
++	const CARD32* hints = (const CARD32*)prop->data;
++	const CARD32 kMinSize = 1 << 4;
++	const CARD32 kResizeInc = 1 << 6;
++	const CARD32 kBaseSize = 1 << 8;
++	CARD32 flags = hints[0];
++
++	int32 baseW = 0;
++	int32 baseH = 0;
++	if ((flags & kBaseSize) != 0 && prop->size >= 17) {
++		baseW = (int32)hints[15];
++		baseH = (int32)hints[16];
++	} else if ((flags & kMinSize) != 0) {
++		baseW = (int32)hints[5];
++		baseH = (int32)hints[6];
++	}
++
++	if ((flags & kResizeInc) != 0) {
++		int32 incW = (int32)hints[9];
++		int32 incH = (int32)hints[10];
++		if (incW > 1 && *width > baseW)
++			*width = baseW + (*width - baseW) / incW * incW;
++		if (incH > 1 && *height > baseH)
++			*height = baseH + (*height - baseH) / incH * incH;
++	}
++
++	if ((flags & kMinSize) != 0) {
++		*width = vMaxI(*width, (int32)hints[5]);
++		*height = vMaxI(*height, (int32)hints[6]);
++	}
++}
++
++
++// The zoom button toggles between the screen and the previous frame; the
++// moved/resized events that follow carry it over to the X window.
++static void
++vZoom(VWindowPriv* priv)
++{
++	BSurface* surface = priv->surface;
++	if (priv->zoomed) {
++		surface->MoveTo(BPoint(priv->restoreX, priv->restoreY));
++		surface->ResizeTo(priv->restoreWidth, priv->restoreHeight);
++		priv->zoomed = false;
++		return;
++	}
++
++	BRect frame = surface->Frame();
++	priv->restoreX = (int32)frame.left;
++	priv->restoreY = (int32)frame.top;
++	priv->restoreWidth = frame.IntegerWidth();
++	priv->restoreHeight = frame.IntegerHeight();
++
++	BRect screen = BScreen().Frame();
++	// Leave room for the tab and the window border.
++	const float kBorder = 5;
++	const float kTab = 22;
++	surface->MoveTo(BPoint(screen.left + kBorder, screen.top + kTab));
++	surface->ResizeTo(screen.Width() - 2 * kBorder,
++		screen.Height() - kTab - kBorder);
++	priv->zoomed = true;
++}
++
++
++static void vChangeNetState(WindowPtr pWin, int action, Atom wanted);
++
++
++//	#pragma mark - surface events
++
++
++// Runs on the server thread from the notify fd; nothing here needs a lock.
++static void
++vSurfaceNotify(int fd, int ready, void* data)
++{
++	VWindowPriv* priv = (VWindowPriv*)data;
++	BMessage event;
++	while (priv->surface != NULL && priv->surface->NextEvent(&event, 0) == B_OK) {
++		WindowPtr pWin = vLookupWindow(priv->xWindow);
++		if (event.what == B_MOUSE_MOVED)
++			VDndPointerMoved(event);
++		else if (event.what == _MESSAGE_DROPPED_ && event.WasDropped())
++			VDndDropped(event);
++		switch (event.what) {
++			case B_WINDOW_MOVED:
++			{
++				BPoint where;
++				if (pWin != NULL && event.FindPoint("where", &where) == B_OK) {
++					// The native frame is the X content origin.
++					int bw = wBorderWidth(pWin);
++					XID values[2] = { (XID)((int32)where.x - bw),
++						(XID)((int32)where.y - bw) };
++					ConfigureWindow(pWin, CWX | CWY, values, wClient(pWin));
++				}
++				break;
++			}
++			case B_WINDOW_RESIZED:
++			{
++				// Frame width, i.e. one less than the pixel count.
++				int32 width = event.GetInt32("width", -1) + 1;
++				int32 height = event.GetInt32("height", -1) + 1;
++				if (pWin != NULL && width > 0 && height > 0) {
++					int32 requestedWidth = width;
++					int32 requestedHeight = height;
++					vApplySizeHints(pWin, &width, &height);
++					XID values[2] = { (XID)width, (XID)height };
++					ConfigureWindow(pWin, CWWidth | CWHeight, values,
++						wClient(pWin));
++					// A rounded size can equal the current X size, so no
++					// PositionWindow follows; correct the native frame here.
++					if (width != requestedWidth || height != requestedHeight) {
++						priv->surface->ResizeTo((float)width - 1,
++							(float)height - 1);
++					}
++				}
++				break;
++			}
++			case B_WINDOW_ACTIVATED:
++				VSetWindowFocus(priv->xWindow,
++					event.GetBool("active", false));
++				break;
++			case B_QUIT_REQUESTED:
++				VSendDeleteWindow(pWin);
++				break;
++			case B_ZOOM:
++				vZoom(priv);
++				break;
++			case B_MINIMIZE:
++			{
++				// Tab double click and Deskbar restore.
++				bool minimize;
++				if (event.FindBool("minimize", &minimize) == B_OK) {
++					priv->surface->Minimize(minimize);
++					if (pWin != NULL) {
++						vChangeNetState(pWin, minimize ? 1 : 0,
++							vAtom("_NET_WM_STATE_HIDDEN"));
++					}
++				}
++				break;
++			}
++			case B_FONTS_UPDATED:
++			{
++				VOp op;
++				memset(&op, 0, sizeof(op));
++				op.what = kVOpSettingsChanged;
++				VEnqueueOp(op);
++				break;
++			}
++			case B_KEY_DOWN:
++			case B_KEY_UP:
++			case B_UNMAPPED_KEY_DOWN:
++			case B_UNMAPPED_KEY_UP:
++			case B_MOUSE_DOWN:
++			case B_MOUSE_UP:
++			case B_MOUSE_MOVED:
++			case B_MOUSE_WHEEL_CHANGED:
++				VHandleWindowInput(event);
++				break;
++			default:
++				break;
++		}
++	}
++}
++
++
++//	#pragma mark - damage upload
++
++
++// Damage is reported before the rendering op lands, so only queue here.
++static const int kMaxDirty = 256;
++static VWindowPriv* sDirty[kMaxDirty];
++static int sDirtyCount = 0;
++static bool sHandlerRegistered = false;
++
++
++static void
++vDamageReport(DamagePtr pDamage, RegionPtr pRegion, void* closure)
++{
++	// NonEmpty only reports again after DamageEmpty, so never drop one.
++	VWindowPriv* priv = (VWindowPriv*)closure;
++	if (priv == NULL || priv->dirty)
++		return;
++
++	if (sDirtyCount >= kMaxDirty)
++		return;
++
++	priv->dirty = true;
++	sDirty[sDirtyCount++] = priv;
++}
++
++
++static void
++vForgetDirty(VWindowPriv* priv)
++{
++	for (int i = 0; i < sDirtyCount; i++) {
++		if (sDirty[i] == priv) {
++			sDirty[i] = sDirty[--sDirtyCount];
++			break;
++		}
++	}
++	priv->dirty = false;
++}
++
++
++static void
++vFlushDamage(void* data, void* timeout)
++{
++	// Rendering for this request batch is complete by block time.
++	while (sDirtyCount > 0) {
++		VWindowPriv* priv = sDirty[--sDirtyCount];
++		priv->dirty = false;
++
++		if (priv->damage == NULL)
++			continue;
++
++		DamagePtr damage = (DamagePtr)priv->damage;
++		RegionPtr region = DamageRegion(damage);
++		int nRects = RegionNumRects(region);
++		BoxPtr rects = RegionRects(region);
++		// Window damage is kept relative to the window origin.
++		WindowPtr pWin = vLookupWindow(priv->xWindow);
++		if (pWin != NULL && priv->surface != NULL && priv->mapped
++			&& rects != NULL && nRects > 0) {
++			int dx = pWin->drawable.x;
++			int dy = pWin->drawable.y;
++			for (int i = 0; i < nRects; i++)
++				VUploadWindowDamage(priv, rects[i].x1 + dx, rects[i].y1 + dy,
++					rects[i].x2 + dx, rects[i].y2 + dy);
++		}
++
++		DamageEmpty(damage);
++	}
++}
++
++
++static void
++vWakeupNop(void* data, int result)
++{
++}
++
++
++// The damage layer destroys window damages itself on DestroyWindow.
++static void
++vDamageDestroy(DamagePtr pDamage, void* closure)
++{
++	VWindowPriv* priv = (VWindowPriv*)closure;
++	if (priv != NULL)
++		priv->damage = NULL;
++}
++
++
++void
++VUploadWindowDamage(VWindowPriv* priv, int x1, int y1, int x2, int y2)
++{
++	if (priv == NULL || priv->surface == NULL || gVScreen == NULL)
++		return;
++
++	BBitmap* buffer = priv->surface->Buffer();
++	if (buffer == NULL)
++		return;
++
++	WindowPtr pWin = vLookupWindow(priv->xWindow);
++	if (pWin == NULL)
++		return;
++
++	PixmapPtr pix = (*gVScreen->GetWindowPixmap)(pWin);
++	if (pix == NULL || pix->devPrivate.ptr == NULL)
++		return;
++
++	// Damage is in screen coordinates here; the per-window pixmap and the
++	// buffer are both addressed relative to their own origin.
++	int32 bw = buffer->Bounds().IntegerWidth() + 1;
++	int32 bh = buffer->Bounds().IntegerHeight() + 1;
++	int32 offX = pWin->drawable.x;
++	int32 offY = pWin->drawable.y;
++	int32 srcOffX = pix->screen_x;
++	int32 srcOffY = pix->screen_y;
++
++	x1 = vMaxI(vMaxI(x1, offX), srcOffX);
++	y1 = vMaxI(vMaxI(y1, offY), srcOffY);
++	x2 = vMinI(vMinI(x2, offX + bw), srcOffX + (int32)pix->drawable.width);
++	y2 = vMinI(vMinI(y2, offY + bh), srcOffY + (int32)pix->drawable.height);
++
++	int32 width = x2 - x1;
++	int32 height = y2 - y1;
++	if (width <= 0 || height <= 0)
++		return;
++
++	int32 srcStride = pix->devKind;
++	uint8* srcBase = (uint8*)pix->devPrivate.ptr;
++	int32 dstStride = buffer->BytesPerRow();
++	uint8* dstBase = (uint8*)buffer->Bits();
++	if (dstBase == NULL)
++		return;
++
++	for (int32 y = 0; y < height; y++) {
++		memcpy(dstBase + (int64)(y1 - offY + y) * dstStride
++				+ (int64)(x1 - offX) * 4,
++			srcBase + (int64)(y1 - srcOffY + y) * srcStride
++				+ (int64)(x1 - srcOffX) * 4,
++			(size_t)width * 4);
++
++		// X leaves alpha at 0, which the compositor would treat as clear.
++		uint32* row = (uint32*)(dstBase + (int64)(y1 - offY + y) * dstStride
++			+ (int64)(x1 - offX) * 4);
++		for (int32 i = 0; i < width; i++)
++			row[i] |= 0xff000000;
++	}
++
++	x1 -= offX;
++	x2 -= offX;
++	y1 -= offY;
++	y2 -= offY;
++
++	priv->surface->Present(BRect(x1, y1, x2 - 1, y2 - 1));
++}
++
++
++//	#pragma mark - WM properties
++
++
++void
++VSyncWindowTitle(VWindowPriv* priv)
++{
++	if (priv == NULL || priv->surface == NULL)
++		return;
++
++	WindowPtr pWin = vLookupWindow(priv->xWindow);
++	if (pWin == NULL)
++		return;
++
++	Atom utf8Atom = vAtom("UTF8_STRING");
++	Atom netName = vAtom("_NET_WM_NAME");
++
++	// Property data carries no terminator.
++	BString title;
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, pWin, netName, serverClient,
++			DixReadAccess) == Success && prop != NULL
++		&& prop->format == 8 && prop->size > 0
++		&& (prop->type == utf8Atom || prop->type == XA_STRING)) {
++		title.SetTo((const char*)prop->data, prop->size);
++	}
++
++	if (title.IsEmpty() && dixLookupProperty(&prop, pWin, XA_WM_NAME,
++			serverClient, DixReadAccess) == Success && prop != NULL
++		&& prop->format == 8 && prop->size > 0) {
++		title.SetTo((const char*)prop->data, prop->size);
++	}
++
++	if (!title.IsEmpty())
++		priv->surface->SetTitle(title.String());
++}
++
++
++void
++VApplyWindowState(VWindowPriv* priv)
++{
++	if (priv == NULL || priv->surface == NULL)
++		return;
++
++	WindowPtr pWin = vLookupWindow(priv->xWindow);
++	if (pWin == NULL)
++		return;
++
++	if (priv->topLevel && pWin->overrideRedirect) {
++		priv->surface->SetLook(B_NO_BORDER_WINDOW_LOOK);
++		priv->surface->SetFeel(B_FLOATING_APP_WINDOW_FEEL);
++		priv->surface->SetFlags(B_AVOID_FOCUS);
++		return;
++	}
++
++	Atom state = vAtom("_NET_WM_STATE");
++	Atom full = vAtom("_NET_WM_STATE_FULLSCREEN");
++	if (vWindowHasAtom(pWin, state, full)) {
++		if (priv->fullscreen)
++			return;
++		// V\OS has no fullscreen look; borderless plus screen-sized
++		// frame is the native equivalent for an X client's request.
++		// The frame is saved the way zoom does, to undo it later.
++		BRect frame = priv->surface->Frame();
++		priv->restoreX = (int32)frame.left;
++		priv->restoreY = (int32)frame.top;
++		priv->restoreWidth = frame.IntegerWidth();
++		priv->restoreHeight = frame.IntegerHeight();
++		priv->fullscreen = true;
++		priv->surface->SetLook(B_NO_BORDER_WINDOW_LOOK);
++		priv->surface->Activate();
++		if (gVScreen != NULL) {
++			priv->surface->MoveTo(B_ORIGIN);
++			priv->surface->ResizeTo((float)gVScreen->width - 1,
++				(float)gVScreen->height - 1);
++		}
++	} else if (priv->fullscreen) {
++		priv->fullscreen = false;
++		priv->zoomed = false;
++		priv->surface->SetLook(B_TITLED_WINDOW_LOOK);
++		priv->surface->MoveTo(BPoint(priv->restoreX, priv->restoreY));
++		priv->surface->ResizeTo(priv->restoreWidth, priv->restoreHeight);
++	}
++}
++
++
++void
++VWindowPropertyChanged(WindowPtr pWin, Atom prop)
++{
++	VWindowPriv* priv = vPriv(pWin);
++	if (priv == NULL || priv->surface == NULL)
++		return;
++
++	Atom netName = vAtom("_NET_WM_NAME");
++	Atom state = vAtom("_NET_WM_STATE");
++
++	if (prop == XA_WM_NAME || prop == netName)
++		VSyncWindowTitle(priv);
++	else if (prop == state)
++		VApplyWindowState(priv);
++	else if (prop == vAtom("_NET_WM_PID"))
++		VWindowAttribute(pWin);
++}
++
++
++static void
++vSetAtomList(WindowPtr pWin, Atom property, Atom* atoms, int count)
++{
++	dixChangeWindowProperty(serverClient, pWin, property, XA_ATOM, 32,
++		PropModeReplace, count, atoms, TRUE);
++}
++
++
++// Applies one _NET_WM_STATE client message item to the window property;
++// the property observer then does the native work.
++static void
++vChangeNetState(WindowPtr pWin, int action, Atom wanted)
++{
++	if (wanted == None)
++		return;
++
++	Atom state = vAtom("_NET_WM_STATE");
++	Atom atoms[65];
++	int count = vReadAtomList(pWin, state, atoms, 64);
++	if (count < 0)
++		count = 0;
++
++	int index = -1;
++	for (int i = 0; i < count; i++) {
++		if (atoms[i] == wanted)
++			index = i;
++	}
++
++	bool add = action == 1 || (action == 2 && index < 0);
++	if (add && index < 0)
++		atoms[count++] = wanted;
++	else if (!add && index >= 0)
++		atoms[index] = atoms[--count];
++	else
++		return;
++
++	vSetAtomList(pWin, state, atoms, count);
++}
++
++
++static int (*sRealSendEvent)(ClientPtr client) = NULL;
++
++
++// There is no window manager: requests clients address to the root are
++// answered here.
++static int
++vSendEvent(ClientPtr client)
++{
++	REQUEST(xSendEventReq);
++	WindowPtr bridge = VClipboardWindow();
++	if (!client->swapped && bridge != NULL
++		&& client->req_len >= bytes_to_int32(sizeof(xSendEventReq))
++		&& stuff->destination == bridge->drawable.id
++		&& VDndSendEvent(&stuff->event))
++		return Success;
++
++	if (client->swapped || client->req_len < bytes_to_int32(sizeof(xSendEventReq))
++		|| gVScreen == NULL
++		|| stuff->destination != gVScreen->root->drawable.id
++		|| (stuff->event.u.u.type & 0x7f) != ClientMessage)
++		return sRealSendEvent(client);
++
++	auto* message = &stuff->event.u.clientMessage;
++
++	WindowPtr pWin = vLookupWindow(message->window);
++	if (pWin == NULL || message->u.l.type == None)
++		return sRealSendEvent(client);
++
++	if (message->u.l.type == vAtom("_NET_WM_STATE")) {
++		int action = (int)message->u.l.longs0;
++		vChangeNetState(pWin, action, (Atom)message->u.l.longs1);
++		vChangeNetState(pWin, action, (Atom)message->u.l.longs2);
++		return Success;
++	}
++
++	if (message->u.l.type == vAtom("_NET_ACTIVE_WINDOW")) {
++		VWindowPriv* priv = vPriv(pWin);
++		if (priv != NULL && priv->surface != NULL && priv->mapped)
++			priv->surface->Activate();
++		return Success;
++	}
++
++	return sRealSendEvent(client);
++}
++
++
++void
++VSetupWindowManager()
++{
++	if (gVScreen == NULL || gVScreen->root == NULL)
++		return;
++
++	WindowPtr root = gVScreen->root;
++	static bool hooked = false;
++	if (!hooked) {
++		hooked = true;
++		sRealSendEvent = ProcVector[X_SendEvent];
++		ProcVector[X_SendEvent] = vSendEvent;
++	}
++
++	VSettingsUpdate();
++	VClipboardInit();
++
++	PropertyPtr existing = NULL;
++	if (dixLookupProperty(&existing, root, vAtom("_NET_SUPPORTED"),
++			serverClient, DixReadAccess) == Success)
++		return;
++
++	Atom supported[] = {
++		vAtom("_NET_SUPPORTED"), vAtom("_NET_SUPPORTING_WM_CHECK"),
++		vAtom("_NET_WM_STATE"), vAtom("_NET_WM_STATE_FULLSCREEN"),
++		vAtom("_NET_WM_STATE_HIDDEN"), vAtom("_NET_ACTIVE_WINDOW"),
++		vAtom("_NET_WM_NAME")
++	};
++	vSetAtomList(root, vAtom("_NET_SUPPORTED"), supported,
++		sizeof(supported) / sizeof(supported[0]));
++
++	// The root doubles as the check window.
++	CARD32 id = root->drawable.id;
++	Atom check = vAtom("_NET_SUPPORTING_WM_CHECK");
++	dixChangeWindowProperty(serverClient, root, check, XA_WINDOW, 32,
++		PropModeReplace, 1, &id, TRUE);
++	const char* name = "XVitruvian";
++	dixChangeWindowProperty(serverClient, root, vAtom("_NET_WM_NAME"),
++		vAtom("UTF8_STRING"), 8, PropModeReplace, strlen(name), (void*)name,
++		TRUE);
++}
++
++
++void
++VSendDeleteWindow(WindowPtr pWin)
++{
++	if (pWin == NULL)
++		return;
++
++	Atom protocols = vAtom("WM_PROTOCOLS");
++	Atom deleteWindow = vAtom("WM_DELETE_WINDOW");
++	if (!vWindowHasAtom(pWin, protocols, deleteWindow)) {
++		// No polite way to ask; disconnect the client like a window
++		// manager's kill.
++		ClientPtr client = wClient(pWin);
++		if (client != NULL && client != serverClient)
++			CloseDownClient(client);
++		return;
++	}
++
++	xEvent event;
++	memset(&event, 0, sizeof(event));
++	event.u.u.type = ClientMessage;
++	event.u.u.detail = 32;
++	event.u.clientMessage.window = pWin->drawable.id;
++	event.u.clientMessage.u.l.type = protocols;
++	event.u.clientMessage.u.l.longs0 = deleteWindow;
++	event.u.clientMessage.u.l.longs1 = CurrentTime;
++	DeliverEvents(pWin, &event, 1, (WindowPtr)NULL);
++}
++
++
++//	#pragma mark - screen procs
++
++
++Bool
++VCreateWindow(WindowPtr pWin)
++{
++	VWindowPriv* priv = (VWindowPriv*)calloc(1, sizeof(VWindowPriv));
++	if (priv == NULL)
++		return FALSE;
++
++	priv->xWindow = pWin->drawable.id;
++	dixSetPrivate(&pWin->devPrivates, gVWindowPrivateKey, priv);
++
++	return fbCreateWindow(pWin);
++}
++
++
++Bool
++VDestroyWindow(WindowPtr pWin)
++{
++	VWindowPriv* priv = vPriv(pWin);
++	if (priv != NULL) {
++		vForgetDirty(priv);
++		if (priv->damage != NULL) {
++			DamageUnregister((DamagePtr)priv->damage);
++			DamageDestroy((DamagePtr)priv->damage);
++			priv->damage = NULL;
++		}
++
++		if (priv->surface != NULL) {
++			VPostWindowGone((uint32)pWin->drawable.id);
++			RemoveNotifyFd(priv->fd);
++			close(priv->fd);
++			delete priv->surface;
++			priv->surface = NULL;
++		}
++
++		free(priv);
++		dixSetPrivate(&pWin->devPrivates, gVWindowPrivateKey, NULL);
++	}
++
++	return fbDestroyWindow(pWin);
++}
++
++
++Bool
++VRealizeWindow(WindowPtr pWin)
++{
++	// InputOnly windows have no content to show.
++	bool topLevel = pWin->parent != NULL && pWin->parent->parent == NULL
++		&& pWin->drawable.class_ != InputOnly;
++
++	if (!fbRealizeWindow(pWin))
++		return FALSE;
++
++	// After the realize so the pixmap is allocated for a mapped window.
++	if (topLevel && pWin->redirectDraw != RedirectDrawManual)
++		compRedirectWindow(serverClient, pWin, CompositeRedirectManual);
++
++	VWindowPriv* priv = vPriv(pWin);
++	if (priv == NULL)
++		return TRUE;
++
++	if (topLevel) {
++		priv->topLevel = true;
++		priv->x = pWin->drawable.x;
++		priv->y = pWin->drawable.y;
++		priv->width = pWin->drawable.width;
++		priv->height = pWin->drawable.height;
++		priv->serial = atomic_add(&sWindowSerial, 1) + 1;
++
++		BRect frame(priv->x, priv->y, priv->x + priv->width - 1,
++			priv->y + priv->height - 1);
++		const char* title = "X11";
++
++		window_look look = B_TITLED_WINDOW_LOOK;
++		window_feel feel = B_NORMAL_WINDOW_FEEL;
++		if (pWin->overrideRedirect) {
++			look = B_NO_BORDER_WINDOW_LOOK;
++			feel = B_FLOATING_APP_WINDOW_FEEL;
++		}
++
++		if (priv->surface == NULL) {
++			BSurface* surface = new(std::nothrow) BSurface(frame, title,
++				look, feel, 0);
++			if (surface == NULL || surface->InitCheck() != B_OK) {
++				delete surface;
++				return TRUE;
++			}
++			int fd = port_to_fd(surface->EventPort());
++			if (fd < 0) {
++				delete surface;
++				return TRUE;
++			}
++			// X clients track the pointer outside their own windows too.
++			surface->SetEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
++			// Listed under the client until the app thread finds its
++			// registered team (Deskbar, roster).
++			pid_t pid = vClientPid(pWin);
++			if (pid > 0)
++				surface->SetTeam((team_id)pid);
++			priv->surface = surface;
++			priv->fd = fd;
++			SetNotifyFd(fd, vSurfaceNotify, X_NOTIFY_READ, priv);
++
++			DamagePtr damage = DamageCreate(vDamageReport, vDamageDestroy,
++				DamageReportNonEmpty, TRUE, pWin->drawable.pScreen, priv);
++			if (damage != NULL) {
++				DamageRegister(&pWin->drawable, damage);
++				priv->damage = damage;
++			}
++		} else {
++			priv->surface->MoveTo(frame.LeftTop());
++			priv->surface->ResizeTo(frame.Width(), frame.Height());
++		}
++
++		VSyncWindowTitle(priv);
++		VApplyWindowState(priv);
++
++		// A window at the origin would hide its tab off screen; Xt and
++		// others ask for 0,0 even with no real preference, so cascade it
++		// like a window manager would. The B_WINDOW_MOVED that follows
++		// moves the X window too. A fullscreen window stays put.
++		if (priv->fullscreen) {
++			// Already placed by VApplyWindowState().
++		} else if (!pWin->overrideRedirect && pWin->drawable.x <= 0
++			&& pWin->drawable.y <= 0) {
++			static int32 sCascade = 0;
++			int32 step = sCascade++ % 8;
++			priv->surface->MoveTo(BPoint(40 + step * 24, 60 + step * 24));
++		} else if (!pWin->overrideRedirect
++			&& (pWin->drawable.x < 5 || pWin->drawable.y < 27)) {
++			// Keep the border and tab on screen, as a window manager
++			// places a client that asked for the corner.
++			priv->surface->MoveTo(BPoint(vMaxI(pWin->drawable.x, 5),
++				vMaxI(pWin->drawable.y, 27)));
++		}
++
++		priv->surface->Show();
++		priv->mapped = true;
++		VWindowAttribute(pWin);
++
++		if (!sHandlerRegistered) {
++			RegisterBlockAndWakeupHandlers(vFlushDamage, vWakeupNop, NULL);
++			sHandlerRegistered = true;
++		}
++
++		// Initial content; later changes arrive through the damage list.
++		VUploadWindowDamage(priv, pWin->drawable.x, pWin->drawable.y,
++			pWin->drawable.x + pWin->drawable.width,
++			pWin->drawable.y + pWin->drawable.height);
++		if (priv->damage != NULL)
++			DamageEmpty((DamagePtr)priv->damage);
++	}
++
++	return TRUE;
++}
++
++
++Bool
++VUnrealizeWindow(WindowPtr pWin)
++{
++	VWindowPriv* priv = vPriv(pWin);
++	if (priv != NULL && priv->surface != NULL) {
++		priv->mapped = false;
++		priv->surface->Hide();
++	}
++
++	return fbUnrealizeWindow(pWin);
++}
++
++
++Bool
++VPositionWindow(WindowPtr pWin, int x, int y)
++{
++	Bool result = fbPositionWindow(pWin, x, y);
++
++	VWindowPriv* priv = vPriv(pWin);
++	if (priv != NULL && priv->surface != NULL) {
++		// Skip echoes of a native move.
++		if (priv->surface->Frame().LeftTop() != BPoint(x, y))
++			priv->surface->MoveTo(BPoint(x, y));
++		priv->x = x;
++		priv->y = y;
++		VSyncWindowFrame(priv);
++	}
++
++	return result;
++}
++
++
++Bool
++VChangeWindowAttributes(WindowPtr pWin, unsigned long mask)
++{
++	VWindowPriv* priv = vPriv(pWin);
++	if (priv != NULL && (mask & CWOverrideRedirect) != 0)
++		VApplyWindowState(priv);
++
++	return fbChangeWindowAttributes(pWin, mask);
++}
++
++
++void
++VSyncWindowFrame(VWindowPriv* priv)
++{
++	if (priv == NULL || priv->surface == NULL)
++		return;
++
++	WindowPtr pWin = vLookupWindow(priv->xWindow);
++	if (pWin == NULL)
++		return;
++
++	int32 width = pWin->drawable.width;
++	int32 height = pWin->drawable.height;
++	if (priv->width == width && priv->height == height)
++		return;
++
++	priv->width = width;
++	priv->height = height;
++	BRect frame = priv->surface->Frame();
++	if (frame.IntegerWidth() + 1 != width
++		|| frame.IntegerHeight() + 1 != height) {
++		priv->surface->ResizeTo((float)width - 1, (float)height - 1);
++	}
++
++	// The buffer is reallocated for the new size; refill all of it.
++	VUploadWindowDamage(priv, pWin->drawable.x, pWin->drawable.y,
++		pWin->drawable.x + width, pWin->drawable.y + height);
++}
+diff --git a/hw/vitruvian/xvitruvian-session.sh b/hw/vitruvian/xvitruvian-session.sh
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/xvitruvian-session.sh
+@@ -0,0 +1,51 @@
++#!/bin/sh
++# Copyright 2026, Dario Casalinuovo. All rights reserved.
++# Distributed under the terms of the MIT License.
++#
++# XVitruvian session launcher: one X server per V\OS session.
++#
++# Mints a MIT-MAGIC-COOKIE-1 for this session, picks a free display,
++# and execs the server with TCP disabled. Runs under the session user;
++# session rules gate who may start it.
++
++set -e
++
++XVITR="${XVITR:-Xvitr}"
++AUTH_DIR="${XAUTHORITY_DIR:-/tmp/.xvitruvian-$$}"
++
++if ! command -v xauth >/dev/null 2>&1; then
++	echo "xvitruvian-session: xauth is required" >&2
++	exit 1
++fi
++
++mkdir -p "$AUTH_DIR"
++chmod 700 "$AUTH_DIR"
++export XAUTHORITY="$AUTH_DIR/Xauthority"
++: > "$XAUTHORITY"
++COOKIE="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
++# Display: first argument (":N" or "N"), else $DISPLAY_NUM, else the
++# first free one.
++NUM=""
++case "${1:-}" in
++	:[0-9]*) NUM="${1#:}"; shift ;;
++	[0-9]*) NUM="$1"; shift ;;
++esac
++[ -n "$NUM" ] || NUM="${DISPLAY_NUM:-}"
++if [ -z "$NUM" ]; then
++	NUM=0
++	# A lock whose server is gone is stale; the server clears it itself.
++	while [ -e "/tmp/.X$NUM-lock" ] \
++		&& kill -0 "$(tr -d ' ' < "/tmp/.X$NUM-lock")" 2>/dev/null; do
++		NUM=$((NUM + 1))
++	done
++fi
++
++# ":N" is the local (unix socket) entry clients look up.
++xauth -f "$XAUTHORITY" add ":$NUM" . "$COOKIE"
++
++# Usually created root-owned 1777 at boot; only set up a missing one.
++[ -d /tmp/.X11-unix ] || mkdir -m 1777 /tmp/.X11-unix
++
++export DISPLAY=":$NUM"
++
++exec "$XVITR" ":$NUM" -auth "$XAUTHORITY" -nolisten tcp -noreset "$@"
+diff --git a/hw/vitruvian/vClipboard.cpp b/hw/vitruvian/vClipboard.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vClipboard.cpp
+@@ -0,0 +1,328 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Bridge between the V\OS system clipboard (text/plain) and the X CLIPBOARD
++// selection. A hidden window owns the selection when V\OS has the content;
++// when an X client owns it, the text is fetched as UTF8_STRING.
++
++#include <dix-config.h>
++
++#include "vPriv.h"
++
++#include <X11/Xatom.h>
++
++#include <Clipboard.h>
++#include <Message.h>
++#include <String.h>
++
++#include <string.h>
++
++
++static WindowPtr sWindow = NULL;
++static BString sText;
++static uint32 sOwnCount = 0;
++static bool sHooked = false;
++static int (*sRealConvert)(ClientPtr) = NULL;
++
++
++static Atom
++vClipAtom(const char* name)
++{
++	return MakeAtom(name, strlen(name), TRUE);
++}
++
++
++WindowPtr
++VClipboardWindow()
++{
++	return sWindow;
++}
++
++
++//	#pragma mark - X to V\OS
++
++
++static void
++vLatin1ToUtf8(const uint8* data, size_t length, BString& out)
++{
++	for (size_t i = 0; i < length; i++) {
++		if (data[i] < 0x80)
++			out.Append((const char*)&data[i], 1);
++		else {
++			char pair[2] = { (char)(0xc0 | (data[i] >> 6)),
++				(char)(0x80 | (data[i] & 0x3f)) };
++			out.Append(pair, 2);
++		}
++	}
++}
++
++
++static void
++vPutClipboard(const BString& text)
++{
++	if (text.Length() == 0 || text == sText)
++		return;
++
++	sText = text;
++	if (!be_clipboard->Lock())
++		return;
++	be_clipboard->Clear();
++	BMessage* data = be_clipboard->Data();
++	if (data != NULL) {
++		data->AddData("text/plain", B_MIME_TYPE, text.String(),
++			text.Length());
++		if (be_clipboard->Commit() == B_OK)
++			sOwnCount = be_clipboard->SystemCount();
++	}
++	be_clipboard->Unlock();
++}
++
++
++static void
++vSelectionCallback(CallbackListPtr* /*pcbl*/, void* /*arg*/, void* callData)
++{
++	SelectionInfoRec* info = (SelectionInfoRec*)callData;
++	Selection* pSel = info->selection;
++	if (sWindow == NULL || info->kind != SelectionSetOwner
++		|| pSel->selection != vClipAtom("CLIPBOARD")
++		|| pSel->pWin == NULL || pSel->pWin == sWindow
++		|| pSel->client == NullClient)
++		return;
++
++	// Ask the new owner for the text; the reply lands as a property.
++	xEvent event;
++	memset(&event, 0, sizeof(event));
++	event.u.u.type = SelectionRequest;
++	event.u.selectionRequest.time = currentTime.milliseconds;
++	event.u.selectionRequest.owner = pSel->window;
++	event.u.selectionRequest.requestor = sWindow->drawable.id;
++	event.u.selectionRequest.selection = pSel->selection;
++	event.u.selectionRequest.target = vClipAtom("UTF8_STRING");
++	event.u.selectionRequest.property = vClipAtom("_VOS_CLIPBOARD");
++	WriteEventsToClient(pSel->client, 1, &event);
++}
++
++
++void
++VClipboardPropertyChanged(WindowPtr pWin, PropertyPtr prop, int state)
++{
++	if (pWin != sWindow || state != PropertyNewValue
++		|| prop->propertyName != vClipAtom("_VOS_CLIPBOARD")
++		|| prop->format != 8 || prop->size == 0)
++		return;
++
++	// INCR transfers are not supported.
++	BString text;
++	if (prop->type == vClipAtom("UTF8_STRING"))
++		text.SetTo((const char*)prop->data, prop->size);
++	else if (prop->type == XA_STRING)
++		vLatin1ToUtf8((const uint8*)prop->data, prop->size, text);
++	else
++		return;
++
++	vPutClipboard(text);
++}
++
++
++//	#pragma mark - V\OS to X
++
++
++static void
++vTextFromClipboard(BString& text)
++{
++	text = "";
++	if (!be_clipboard->Lock())
++		return;
++	BMessage* data = be_clipboard->Data();
++	const char* bytes;
++	ssize_t length;
++	if (data != NULL && data->FindData("text/plain", B_MIME_TYPE,
++			(const void**)&bytes, &length) == B_OK && length > 0)
++		text.SetTo(bytes, length);
++	be_clipboard->Unlock();
++}
++
++
++static int
++vConvertSelection(ClientPtr client)
++{
++	xConvertSelectionReq* stuff
++		= (xConvertSelectionReq*)client->requestBuffer;
++	Selection* pSel = NULL;
++	WindowPtr pWin = NULL;
++	if (sWindow == NULL || (stuff->selection != vClipAtom("CLIPBOARD")
++			&& stuff->selection != vClipAtom("XdndSelection"))
++		|| dixLookupSelection(&pSel, stuff->selection, client, DixReadAccess)
++			!= Success
++		|| pSel->pWin != sWindow
++		|| dixLookupWindow(&pWin, stuff->requestor, client, DixSetAttrAccess)
++			!= Success)
++		return sRealConvert(client);
++
++	Atom property = stuff->property != None ? stuff->property : stuff->target;
++	Atom targets = vClipAtom("TARGETS");
++	Atom utf8 = vClipAtom("UTF8_STRING");
++	Atom plainUtf8 = vClipAtom("text/plain;charset=utf-8");
++	Atom plain = vClipAtom("text/plain");
++	Atom textAtom = vClipAtom("TEXT");
++
++	bool done = true;
++	if (stuff->selection == vClipAtom("XdndSelection"))
++		done = VDndConvert(stuff->target, pWin, property);
++	else if (stuff->target == targets) {
++		Atom list[] = { targets, utf8, XA_STRING, textAtom, plainUtf8,
++			plain };
++		dixChangeWindowProperty(serverClient, pWin, property, XA_ATOM, 32,
++			PropModeReplace, sizeof(list) / sizeof(list[0]), list, TRUE);
++	} else if (stuff->target == utf8 || stuff->target == textAtom
++			|| stuff->target == plainUtf8 || stuff->target == plain) {
++		dixChangeWindowProperty(serverClient, pWin, property,
++			stuff->target == textAtom ? utf8 : stuff->target, 8,
++			PropModeReplace, sText.Length(), (void*)sText.String(), TRUE);
++	} else if (stuff->target == XA_STRING) {
++		// Latin-1: keep ASCII and U+0080..U+00FF, drop the rest to '?'.
++		std::vector<uint8> out;
++		const uint8* s = (const uint8*)sText.String();
++		for (int32 i = 0; i < sText.Length(); i++) {
++			if (s[i] < 0x80)
++				out.push_back(s[i]);
++			else if ((s[i] & 0xfe) == 0xc2 && i + 1 < sText.Length()) {
++				out.push_back(((s[i] & 0x03) << 6) | (s[i + 1] & 0x3f));
++				i++;
++			} else {
++				out.push_back('?');
++				while (i + 1 < sText.Length() && (s[i + 1] & 0xc0) == 0x80)
++					i++;
++			}
++		}
++		dixChangeWindowProperty(serverClient, pWin, property, XA_STRING, 8,
++			PropModeReplace, out.size(), out.data(), TRUE);
++	} else
++		done = false;
++
++	xEvent event;
++	memset(&event, 0, sizeof(event));
++	event.u.u.type = SelectionNotify;
++	event.u.selectionNotify.time = stuff->time;
++	event.u.selectionNotify.requestor = stuff->requestor;
++	event.u.selectionNotify.selection = stuff->selection;
++	event.u.selectionNotify.target = stuff->target;
++	event.u.selectionNotify.property = done ? property : None;
++	WriteEventsToClient(client, 1, &event);
++	return Success;
++}
++
++
++void
++VSelectionTake(Atom selection)
++{
++	Selection* pSel = NULL;
++	if (dixLookupSelection(&pSel, selection, serverClient, DixSetAttrAccess)
++			!= Success)
++		pSel = NULL;
++
++	if (pSel != NULL && pSel->pWin == sWindow)
++		return;
++
++	if (pSel == NULL) {
++		pSel = dixAllocateObjectWithPrivates(Selection, PRIVATE_SELECTION);
++		if (pSel == NULL)
++			return;
++		pSel->selection = selection;
++		pSel->next = CurrentSelections;
++		CurrentSelections = pSel;
++	} else if (pSel->client != NullClient && pSel->window != None) {
++		xEvent clear;
++		memset(&clear, 0, sizeof(clear));
++		clear.u.u.type = SelectionClear;
++		clear.u.selectionClear.time = currentTime.milliseconds;
++		clear.u.selectionClear.window = pSel->window;
++		clear.u.selectionClear.atom = selection;
++		WriteEventsToClient(pSel->client, 1, &clear);
++	}
++
++	UpdateCurrentTime();
++	pSel->lastTimeChanged = currentTime;
++	pSel->window = sWindow->drawable.id;
++	pSel->pWin = sWindow;
++	pSel->client = NullClient;
++
++	// Let XFIXES and clipboard managers see the change.
++	SelectionInfoRec info = { pSel, serverClient, SelectionSetOwner };
++	CallCallbacks(&SelectionCallback, &info);
++}
++
++
++void
++VSelectionRelease(Atom selection)
++{
++	Selection* pSel = NULL;
++	if (dixLookupSelection(&pSel, selection, serverClient, DixSetAttrAccess)
++			!= Success || pSel->pWin != sWindow)
++		return;
++
++	pSel->window = None;
++	pSel->pWin = NULL;
++	pSel->client = NullClient;
++	SelectionInfoRec info = { pSel, serverClient, SelectionSetOwner };
++	CallCallbacks(&SelectionCallback, &info);
++}
++
++
++static void
++vTakeOwnership()
++{
++	VSelectionTake(vClipAtom("CLIPBOARD"));
++}
++
++
++// Called from the server thread on B_CLIPBOARD_CHANGED.
++void
++VClipboardChanged()
++{
++	if (sWindow == NULL)
++		return;
++
++	// Our own commit comes back as a change notice.
++	if (be_clipboard->SystemCount() == sOwnCount)
++		return;
++
++	BString text;
++	vTextFromClipboard(text);
++	if (text.Length() == 0)
++		return;
++
++	sText = text;
++	vTakeOwnership();
++}
++
++
++void
++VClipboardInit()
++{
++	if (sHooked || gVScreen == NULL || gVScreen->root == NULL)
++		return;
++
++	int error = 0;
++	sWindow = CreateWindow(FakeClientID(0), gVScreen->root, -1, -1, 1, 1, 0,
++		InputOnly, 0, NULL, 0, serverClient, CopyFromParent, &error);
++	if (sWindow == NULL)
++		return;
++	if (!AddResource(sWindow->drawable.id, RT_WINDOW, sWindow)) {
++		sWindow = NULL;
++		return;
++	}
++
++	sHooked = true;
++	sRealConvert = ProcVector[X_ConvertSelection];
++	ProcVector[X_ConvertSelection] = vConvertSelection;
++	AddCallback(&SelectionCallback, vSelectionCallback, NULL);
++
++	vTextFromClipboard(sText);
++	if (sText.Length() > 0) {
++		sOwnCount = 0;
++		vTakeOwnership();
++	}
++}
+diff --git a/hw/vitruvian/vDnd.cpp b/hw/vitruvian/vDnd.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vDnd.cpp
+@@ -0,0 +1,768 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Drag and drop between V\OS and X (XDND v5). An X-source drag over native
++// windows is one-way: the source is never told about the target.
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include "vPriv.h"
++
++#include <X11/Xatom.h>
++
++#include <AppDefs.h>
++#include <Entry.h>
++#include <Message.h>
++#include <Path.h>
++#include <String.h>
++#include <View.h>
++#include <Window.h>
++
++#include <stdio.h>
++#include <string.h>
++
++#include <vector>
++
++
++static const int kVersion = 5;
++static const bigtime_t kStatusTimeout = 300000;
++static const CARD32 kFinishTimeout = 10000;
++
++static const char* const kOriginField = "x-vnd.v-os-xvitruvian:origin";
++
++
++static Atom
++vA(const char* name)
++{
++	return MakeAtom(name, strlen(name), TRUE);
++}
++
++
++static inline int32
++vMinI(int32 a, int32 b)
++{
++	return a < b ? a : b;
++}
++
++
++static WindowPtr
++vFind(Window id)
++{
++	WindowPtr pWin = NULL;
++	if (dixLookupWindow(&pWin, id, serverClient, DixReadAccess) != Success)
++		return NULL;
++	return pWin;
++}
++
++
++//	#pragma mark - V\OS to X: data
++
++
++static BString sUris;
++static BString sText;
++static bool sHasUris = false;
++static bool sHasText = false;
++static std::vector<Atom> sTypes;
++
++
++static void
++vEncodeUri(const char* path, BString& out)
++{
++	out << "file://";
++	for (const unsigned char* p = (const unsigned char*)path; *p != 0; p++) {
++		if (isalnum(*p) || strchr("/-._~", *p) != NULL)
++			out.Append((const char*)p, 1);
++		else {
++			char hex[4];
++			snprintf(hex, sizeof(hex), "%%%02X", *p);
++			out << hex;
++		}
++	}
++	out << "\r\n";
++}
++
++
++static bool
++vBuildData(const BMessage& drag)
++{
++	sUris = "";
++	sText = "";
++	sHasUris = false;
++	sHasText = false;
++	sTypes.clear();
++
++	if (drag.HasBool(kOriginField))
++		return false;
++
++	entry_ref ref;
++	for (int32 i = 0; drag.FindRef("refs", i, &ref) == B_OK; i++) {
++		BPath path(&ref);
++		if (path.InitCheck() != B_OK)
++			continue;
++		vEncodeUri(path.Path(), sUris);
++		sHasUris = true;
++	}
++
++	const void* data;
++	ssize_t length;
++	if (drag.FindData("text/plain", B_MIME_TYPE, &data, &length) == B_OK
++		&& length > 0) {
++		// A trailing NUL is part of some senders' payload.
++		while (length > 0 && ((const char*)data)[length - 1] == '\0')
++			length--;
++		sText.SetTo((const char*)data, length);
++		sHasText = sText.Length() > 0;
++	}
++
++	if (sHasUris)
++		sTypes.push_back(vA("text/uri-list"));
++	if (sHasText) {
++		sTypes.push_back(vA("text/plain;charset=utf-8"));
++		sTypes.push_back(vA("UTF8_STRING"));
++		sTypes.push_back(vA("text/plain"));
++		sTypes.push_back(XA_STRING);
++	}
++	return !sTypes.empty();
++}
++
++
++// Called with the selection request of an XDND target.
++bool
++VDndConvert(Atom target, WindowPtr pWin, Atom property)
++{
++	Atom uriList = vA("text/uri-list");
++	Atom targets = vA("TARGETS");
++	bool isText = target == vA("text/plain;charset=utf-8")
++		|| target == vA("UTF8_STRING") || target == vA("text/plain")
++		|| target == XA_STRING || target == vA("TEXT");
++
++	if (target == targets) {
++		std::vector<Atom> list;
++		list.push_back(targets);
++		list.insert(list.end(), sTypes.begin(), sTypes.end());
++		dixChangeWindowProperty(serverClient, pWin, property, XA_ATOM, 32,
++			PropModeReplace, list.size(), list.data(), TRUE);
++		return true;
++	}
++	if (target == uriList && sHasUris) {
++		dixChangeWindowProperty(serverClient, pWin, property, target, 8,
++			PropModeReplace, sUris.Length(), (void*)sUris.String(), TRUE);
++		return true;
++	}
++	if (isText && sHasText) {
++		dixChangeWindowProperty(serverClient, pWin, property,
++			target == vA("TEXT") ? vA("UTF8_STRING") : target, 8,
++			PropModeReplace, sText.Length(), (void*)sText.String(), TRUE);
++		return true;
++	}
++	return false;
++}
++
++
++//	#pragma mark - V\OS to X: session
++
++
++struct VDndSession {
++	bool		active;
++	bool		dropped;
++	bool		accepted;
++	bool		waiting;
++	bigtime_t	sentAt;
++	Window		target;
++	int			version;
++	bool		hasPending;
++	int32		pendingX;
++	int32		pendingY;
++	int32		lastX;
++	int32		lastY;
++};
++
++static VDndSession sSession;
++static bool sDragSeen = false;
++static bool sDragUsable = false;
++static bool sOwning = false;
++static OsTimerPtr sFinishTimer = NULL;
++
++
++static void
++vSendMessage(WindowPtr target, Atom type, long l0, long l1, long l2, long l3,
++	long l4)
++{
++	WindowPtr source = VClipboardWindow();
++	if (target == NULL || source == NULL)
++		return;
++
++	xEvent event;
++	memset(&event, 0, sizeof(event));
++	event.u.u.type = ClientMessage;
++	event.u.u.detail = 32;
++	event.u.clientMessage.window = target->drawable.id;
++	event.u.clientMessage.u.l.type = type;
++	event.u.clientMessage.u.l.longs0 = l0;
++	event.u.clientMessage.u.l.longs1 = l1;
++	event.u.clientMessage.u.l.longs2 = l2;
++	event.u.clientMessage.u.l.longs3 = l3;
++	event.u.clientMessage.u.l.longs4 = l4;
++	WriteEventsToClient(wClient(target), 1, &event);
++}
++
++
++static void
++vReleaseSelection()
++{
++	if (sFinishTimer != NULL) {
++		TimerFree(sFinishTimer);
++		sFinishTimer = NULL;
++	}
++	if (sOwning) {
++		VSelectionRelease(vA("XdndSelection"));
++		sOwning = false;
++	}
++}
++
++
++static CARD32
++vFinishTimeout(OsTimerPtr /*timer*/, CARD32 /*now*/, void* /*arg*/)
++{
++	sFinishTimer = NULL;
++	sSession.active = false;
++	sSession.dropped = false;
++	vReleaseSelection();
++	return 0;
++}
++
++
++static void
++vEndSession(bool sendLeave)
++{
++	if (sSession.active && sendLeave && !sSession.dropped) {
++		WindowPtr target = vFind(sSession.target);
++		WindowPtr source = VClipboardWindow();
++		if (target != NULL && source != NULL) {
++			vSendMessage(target, vA("XdndLeave"), source->drawable.id, 0, 0,
++				0, 0);
++		}
++	}
++	memset(&sSession, 0, sizeof(sSession));
++	vReleaseSelection();
++}
++
++
++static bool
++vInside(WindowPtr w, int32 x, int32 y)
++{
++	int32 bw = wBorderWidth(w);
++	return x >= w->drawable.x - bw && y >= w->drawable.y - bw
++		&& x < w->drawable.x + (int32)w->drawable.width + bw
++		&& y < w->drawable.y + (int32)w->drawable.height + bw;
++}
++
++
++static WindowPtr
++vTopWindowAt(int32 x, int32 y, bool skipOverride)
++{
++	if (gVScreen == NULL)
++		return NULL;
++
++	for (WindowPtr w = gVScreen->root->firstChild; w != NULL;
++			w = w->nextSib) {
++		if (!w->mapped || w->drawable.class_ != InputOutput
++			|| (skipOverride && w->overrideRedirect))
++			continue;
++		if (vInside(w, x, y))
++			return w;
++	}
++	return NULL;
++}
++
++
++// The deepest window under the point that advertises XdndAware.
++static WindowPtr
++vFindAware(WindowPtr top, int32 x, int32 y, int* version)
++{
++	Atom aware = vA("XdndAware");
++	WindowPtr best = NULL;
++	WindowPtr w = top;
++	while (w != NULL) {
++		PropertyPtr prop = NULL;
++		if (dixLookupProperty(&prop, w, aware, serverClient, DixReadAccess)
++				== Success && prop != NULL && prop->format == 32
++			&& prop->size >= 1) {
++			best = w;
++			*version = vMinI((int32)((CARD32*)prop->data)[0], kVersion);
++		}
++
++		WindowPtr next = NULL;
++		for (WindowPtr c = w->firstChild; c != NULL; c = c->nextSib) {
++			if (c->mapped && c->drawable.class_ == InputOutput
++				&& vInside(c, x, y)) {
++				next = c;
++				break;
++			}
++		}
++		w = next;
++	}
++	return best;
++}
++
++
++static void
++vSendEnter(WindowPtr target)
++{
++	WindowPtr source = VClipboardWindow();
++	if (source == NULL)
++		return;
++
++	long more = sTypes.size() > 3 ? 1 : 0;
++	if (more) {
++		dixChangeWindowProperty(serverClient, source, vA("XdndTypeList"),
++			XA_ATOM, 32, PropModeReplace, sTypes.size(), sTypes.data(), TRUE);
++	}
++	long t[3] = { 0, 0, 0 };
++	for (size_t i = 0; i < 3 && i < sTypes.size(); i++)
++		t[i] = (long)sTypes[i];
++	vSendMessage(target, vA("XdndEnter"), source->drawable.id,
++		((long)sSession.version << 24) | more, t[0], t[1], t[2]);
++}
++
++
++static void
++vSendPosition(WindowPtr target, int32 x, int32 y)
++{
++	WindowPtr source = VClipboardWindow();
++	if (source == NULL)
++		return;
++
++	sSession.waiting = true;
++	sSession.sentAt = system_time();
++	sSession.hasPending = false;
++	sSession.lastX = x;
++	sSession.lastY = y;
++	vSendMessage(target, vA("XdndPosition"), source->drawable.id, 0,
++		((long)(x & 0xffff) << 16) | (y & 0xffff),
++		(long)currentTime.milliseconds, (long)vA("XdndActionCopy"));
++}
++
++
++static bool
++vPointOf(const BMessage& event, BPoint* where)
++{
++	return event.FindPoint("screen_where", where) == B_OK
++		|| event.FindPoint("where", where) == B_OK;
++}
++
++
++//	#pragma mark - X to V\OS
++
++
++class VDragHost : public BWindow {
++public:
++	VDragHost()
++		:
++		BWindow(BRect(-200, -200, -190, -190), "xdnd",
++			B_NO_BORDER_WINDOW_LOOK, B_NORMAL_WINDOW_FEEL,
++			B_NOT_ZOOMABLE | B_AVOID_FOCUS | B_NOT_MOVABLE),
++		fView(new BView(Bounds(), "xdnd", B_FOLLOW_ALL, 0))
++	{
++		AddChild(fView);
++	}
++
++	virtual void MessageReceived(BMessage* message)
++	{
++		if (message->what != 'XDnd') {
++			BWindow::MessageReceived(message);
++			return;
++		}
++
++		BMessage drag;
++		if (message->FindMessage("drag", &drag) != B_OK)
++			return;
++		drag.AddBool(kOriginField, true);
++		fView->DragMessage(&drag, NULL, B_OP_BLEND, BPoint(0, 0), fView);
++	}
++
++private:
++	BView*	fView;
++};
++
++static VDragHost* sHost = NULL;
++
++enum {
++	kFetchIdle = 0,
++	kFetching,
++	kFetchDone
++};
++
++static int sFetchState = kFetchIdle;
++static size_t sFetchIndex = 0;
++static int32 sFetchButtons = 0;
++
++
++static Atom
++vFetchTarget(size_t index)
++{
++	switch (index) {
++		case 0:
++			return vA("text/uri-list");
++		case 1:
++			return vA("text/plain;charset=utf-8");
++		case 2:
++			return vA("UTF8_STRING");
++		case 3:
++			return XA_STRING;
++	}
++	return None;
++}
++
++
++static void
++vRequestFetch(Selection* pSel)
++{
++	WindowPtr source = VClipboardWindow();
++	Atom target = vFetchTarget(sFetchIndex);
++	if (source == NULL || target == None) {
++		sFetchState = kFetchDone;
++		return;
++	}
++
++	xEvent event;
++	memset(&event, 0, sizeof(event));
++	event.u.u.type = SelectionRequest;
++	event.u.selectionRequest.time = pSel->lastTimeChanged.milliseconds;
++	event.u.selectionRequest.owner = pSel->window;
++	event.u.selectionRequest.requestor = source->drawable.id;
++	event.u.selectionRequest.selection = pSel->selection;
++	event.u.selectionRequest.target = target;
++	event.u.selectionRequest.property = vA("_VOS_XDND");
++	WriteEventsToClient(pSel->client, 1, &event);
++}
++
++
++static int
++vHexValue(char c)
++{
++	if (c >= '0' && c <= '9')
++		return c - '0';
++	if (c >= 'a' && c <= 'f')
++		return c - 'a' + 10;
++	if (c >= 'A' && c <= 'F')
++		return c - 'A' + 10;
++	return -1;
++}
++
++
++static void
++vPostDrag(BMessage& drag, int32 buttons)
++{
++	if (sHost == NULL)
++		return;
++
++	drag.AddInt32("buttons", buttons);
++	BMessage post('XDnd');
++	post.AddMessage("drag", &drag);
++	sHost->PostMessage(&post);
++}
++
++
++static void
++vFetchComplete(Atom target, const uint8* data, size_t size)
++{
++	BMessage drag;
++	if (target == vA("text/uri-list")) {
++		drag.what = B_SIMPLE_DATA;
++		BString all((const char*)data, size);
++		int32 start = 0;
++		bool any = false;
++		while (start < all.Length()) {
++			int32 end = all.FindFirst('\n', start);
++			if (end < 0)
++				end = all.Length();
++			BString line;
++			all.CopyInto(line, start, end - start);
++			line.RemoveAll("\r");
++			start = end + 1;
++			if (!line.StartsWith("file://"))
++				continue;
++
++			// Percent-decode the path after the (empty) host.
++			BString path;
++			const char* p = line.String() + 7;
++			p = strchr(p, '/');
++			if (p == NULL)
++				continue;
++			for (; *p != '\0'; p++) {
++				if (*p == '%' && vHexValue(p[1]) >= 0 && vHexValue(p[2]) >= 0) {
++					char c = (char)(vHexValue(p[1]) * 16 + vHexValue(p[2]));
++					path.Append(&c, 1);
++					p += 2;
++				} else
++					path.Append(p, 1);
++			}
++
++			entry_ref ref;
++			if (get_ref_for_path(path.String(), &ref) == B_OK) {
++				drag.AddRef("refs", &ref);
++				any = true;
++			}
++		}
++		if (!any)
++			return;
++	} else {
++		drag.what = B_MIME_DATA;
++		BString text;
++		if (target == XA_STRING) {
++			for (size_t i = 0; i < size; i++) {
++				if (data[i] < 0x80)
++					text.Append((const char*)&data[i], 1);
++				else {
++					char pair[2] = { (char)(0xc0 | (data[i] >> 6)),
++						(char)(0x80 | (data[i] & 0x3f)) };
++					text.Append(pair, 2);
++				}
++			}
++		} else
++			text.SetTo((const char*)data, size);
++		if (text.Length() == 0)
++			return;
++		drag.AddData("text/plain", B_MIME_TYPE, text.String(), text.Length());
++	}
++
++	vPostDrag(drag, sFetchButtons);
++}
++
++
++// A SelectionNotify the XDND source answered our fetch with.
++static void
++vFetchNotify(xEvent* event)
++{
++	WindowPtr source = VClipboardWindow();
++	if (source == NULL || sFetchState != kFetching)
++		return;
++
++	Atom property = event->u.selectionNotify.property;
++	Atom target = event->u.selectionNotify.target;
++	if (property != None) {
++		PropertyPtr prop = NULL;
++		if (dixLookupProperty(&prop, source, vA("_VOS_XDND"), serverClient,
++				DixReadAccess) == Success && prop != NULL
++			&& prop->format == 8 && prop->size > 0) {
++			sFetchState = kFetchDone;
++			vFetchComplete(target, (const uint8*)prop->data, prop->size);
++			DeleteProperty(serverClient, source, vA("_VOS_XDND"));
++			return;
++		}
++	}
++
++	Selection* pSel = NULL;
++	if (++sFetchIndex < 4 && dixLookupSelection(&pSel, vA("XdndSelection"),
++			serverClient, DixGetAttrAccess) == Success && pSel->client != NULL)
++		vRequestFetch(pSel);
++	else
++		sFetchState = kFetchDone;
++}
++
++
++static void
++vCheckXSource(const BMessage& event, BPoint where)
++{
++	int32 buttons = 0;
++	event.FindInt32("buttons", &buttons);
++	if (buttons == 0) {
++		sFetchState = kFetchIdle;
++		sFetchIndex = 0;
++		return;
++	}
++	if (sFetchState != kFetchIdle)
++		return;
++
++	WindowPtr clip = VClipboardWindow();
++	Selection* pSel = NULL;
++	if (clip == NULL || dixLookupSelection(&pSel, vA("XdndSelection"),
++			serverClient, DixGetAttrAccess) != Success
++		|| pSel->pWin == NULL || pSel->pWin == clip
++		|| pSel->client == NullClient)
++		return;
++
++	// An explicit grab by the selection owner is a drag in progress; an
++	// implicit one is just a button held in an X window.
++	DeviceIntPtr pointer = inputInfo.pointer;
++	if (pointer == NULL || pointer->deviceGrab.grab == NULL
++		|| pointer->deviceGrab.implicitGrab
++		|| (int)CLIENT_ID(pointer->deviceGrab.grab->resource)
++			!= pSel->client->index)
++		return;
++
++	if (vTopWindowAt((int32)where.x, (int32)where.y, true) != NULL)
++		return;
++
++	sFetchState = kFetching;
++	sFetchIndex = 0;
++	sFetchButtons = buttons;
++	vRequestFetch(pSel);
++}
++
++
++//	#pragma mark - entry points
++
++
++void
++VDndInit()
++{
++	if (sHost != NULL)
++		return;
++
++	sHost = new(std::nothrow) VDragHost();
++	if (sHost != NULL)
++		sHost->Run();
++}
++
++
++// B_MOUSE_MOVED on a surface; with be:drag_message a V\OS drag is over
++// X, without one an X drag may have left it.
++void
++VDndPointerMoved(const BMessage& event)
++{
++	BPoint where;
++	if (!vPointOf(event, &where))
++		return;
++
++	BMessage drag;
++	if (event.FindMessage("be:drag_message", &drag) != B_OK) {
++		if (sDragSeen) {
++			sDragSeen = false;
++			if (sSession.active && !sSession.dropped)
++				vEndSession(true);
++		}
++		vCheckXSource(event, where);
++		return;
++	}
++
++	if (!sDragSeen) {
++		sDragSeen = true;
++		sDragUsable = vBuildData(drag);
++		if (sSession.active)
++			vEndSession(false);
++	}
++	if (!sDragUsable || sSession.dropped)
++		return;
++
++	int32 x = (int32)where.x;
++	int32 y = (int32)where.y;
++	int version = 0;
++	WindowPtr top = vTopWindowAt(x, y, false);
++	WindowPtr target = top != NULL ? vFindAware(top, x, y, &version) : NULL;
++	WindowPtr source = VClipboardWindow();
++	if (target == NULL || source == NULL) {
++		if (sSession.active)
++			vEndSession(true);
++		return;
++	}
++
++	if (sSession.active && sSession.target != target->drawable.id)
++		vEndSession(true);
++
++	if (!sSession.active) {
++		if (!sOwning) {
++			VSelectionTake(vA("XdndSelection"));
++			sOwning = true;
++		}
++		sSession.active = true;
++		sSession.target = target->drawable.id;
++		sSession.version = version;
++		sSession.accepted = false;
++		sSession.waiting = false;
++		vSendEnter(target);
++		vSendPosition(target, x, y);
++		return;
++	}
++
++	if (x == sSession.lastX && y == sSession.lastY)
++		return;
++
++	if (sSession.waiting
++		&& system_time() - sSession.sentAt < kStatusTimeout) {
++		sSession.hasPending = true;
++		sSession.pendingX = x;
++		sSession.pendingY = y;
++		return;
++	}
++	vSendPosition(target, x, y);
++}
++
++
++// The drop arrives as the dropped message on the surface under the
++// pointer.
++void
++VDndDropped(const BMessage& event)
++{
++	BPoint where;
++	if (!sSession.active || sSession.dropped || !vPointOf(event, &where))
++		return;
++
++	WindowPtr target = vFind(sSession.target);
++	WindowPtr source = VClipboardWindow();
++	if (target == NULL || source == NULL) {
++		vEndSession(false);
++		return;
++	}
++
++	if (!sSession.accepted) {
++		vEndSession(true);
++		return;
++	}
++
++	if ((int32)where.x != sSession.lastX || (int32)where.y != sSession.lastY)
++		vSendPosition(target, (int32)where.x, (int32)where.y);
++
++	sSession.dropped = true;
++	sDragSeen = false;
++	vSendMessage(target, vA("XdndDrop"), source->drawable.id, 0,
++		(long)currentTime.milliseconds, 0, 0);
++	sFinishTimer = TimerSet(sFinishTimer, 0, kFinishTimeout, vFinishTimeout,
++		NULL);
++}
++
++
++// SendEvent requests addressed to the bridge window: XDND replies from
++// the target and the answer to an X-source fetch.
++bool
++VDndSendEvent(xEvent* event)
++{
++	uint8 type = event->u.u.type & 0x7f;
++	if (type == SelectionNotify) {
++		if (event->u.selectionNotify.selection != vA("XdndSelection"))
++			return false;
++		vFetchNotify(event);
++		return true;
++	}
++	if (type != ClientMessage)
++		return false;
++
++	auto* message = &event->u.clientMessage;
++	if (message->u.l.type == vA("XdndStatus")) {
++		if (!sSession.active || (Window)message->u.l.longs0 != sSession.target)
++			return true;
++
++		sSession.accepted = (message->u.l.longs1 & 1) != 0;
++		sSession.waiting = false;
++		if (sSession.hasPending && !sSession.dropped) {
++			WindowPtr target = vFind(sSession.target);
++			if (target != NULL) {
++				vSendPosition(target, sSession.pendingX, sSession.pendingY);
++			}
++		}
++		return true;
++	}
++	if (message->u.l.type == vA("XdndFinished")) {
++		if (sSession.active && sSession.dropped
++			&& (Window)message->u.l.longs0 == sSession.target) {
++			vEndSession(false);
++		}
++		return true;
++	}
++	return false;
++}

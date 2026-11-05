@@ -1,0 +1,5 @@
+xorg-server (2:21.1.16-1.3+deb13u4vos1) unstable; urgency=medium
+
+  * XVitruvian rootless server for V\OS.
+
+ -- The Vitruvian Project <packages@v-os.dev>  Thu, 05 Nov 2026 12:00:00 +0000

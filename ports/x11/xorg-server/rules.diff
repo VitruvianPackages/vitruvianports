@@ -1,0 +1,87 @@
+diff -urN a/debian/control b/debian/control
+--- a/debian/control
++++ b/debian/control
+@@ -75,6 +75,9 @@
+ # systemd-daemon
+   libsystemd-dev [linux-any],
+   systemd-dev [linux-any],
++  vos-dev,
++  vos-buildtools,
++  dh-vos,
+ Build-Depends-Indep: xz-utils
+ Standards-Version: 3.9.8
+ Rules-Requires-Root: binary-targets
+@@ -240,6 +243,20 @@
+  .
+  This package is built from the X.org xserver module.
+ 
++Package: xserver-xvitruvian
++Architecture: any
++Depends:
++ xserver-common (>= ${source:Version}),
++ vos,
++ ${shlibs:Depends},
++ ${misc:Depends},
++Recommends: xauth
++Description: rootless X server for V\OS
++ Xvitr runs X11 programs on the V\OS desktop: each X11 top-level window
++ is a native window, and keyboard and pointer input come from it.
++ .
++ This package is built from the X.org xserver module.
++
+ Package: xserver-common
+ Architecture: all
+ Multi-Arch: foreign
+diff -urN a/debian/rules b/debian/rules
+--- a/debian/rules
++++ b/debian/rules
+@@ -114,7 +114,11 @@
+ 
+ override_dh_install:
+ 	dh_install -pxserver-xorg-core-udeb --sourcedir=debian/tmp/udeb
++	# Xvitr is a background app: hidden from the Deskbar
++	/usr/lib/vos/buildtools/rc debian/xvitr.rdef -o debian/xvitr.rsrc
++	/usr/lib/vos/buildtools/xres -o debian/tmp/main/usr/bin/Xvitr debian/xvitr.rsrc
+ 	dh_install --remaining-packages --sourcedir=debian/tmp/main
++	dh_vosattrs -pxserver-xvitruvian
+ 	install -d $(CURDIR)/debian/xserver-xorg-dev/usr/share/xserver-xorg
+ 	# Extract only the major ABI version:
+ 	set -e; \
+@@ -143,6 +147,13 @@
+ 	install -m 644 debian/local/64-xorg-xkb.rules debian/xserver-xorg-core-udeb$(deb_udevdir)/rules.d
+ endif
+ 
++# strip would drop the resources appended to Xvitr
++override_dh_strip:
++	dh_strip -Xusr/bin/Xvitr
++
++override_dh_dwz:
++	dh_dwz -Xusr/bin/Xvitr
++
+ override_dh_missing-indep:
+ 	dh_missing -i -X udeb/
+ 
+diff -urN a/debian/rules.flags b/debian/rules.flags
+--- a/debian/rules.flags
++++ b/debian/rules.flags
+@@ -58,6 +58,7 @@
+ 	--enable-xvfb \
+ 	--enable-xnest \
+ 	--enable-kdrive \
++	--enable-vitruvian \
+ 	--enable-xephyr \
+ 	--with-sha1=libnettle \
+ 	--enable-xcsecurity \
+diff -urN a/debian/xserver-xvitruvian.install b/debian/xserver-xvitruvian.install
+--- a/debian/xserver-xvitruvian.install
++++ b/debian/xserver-xvitruvian.install
+@@ -0,0 +1,2 @@
++usr/bin/Xvitr
++usr/bin/xvitruvian-session.sh
+diff -urN a/debian/xvitr.rdef b/debian/xvitr.rdef
+--- a/debian/xvitr.rdef
++++ b/debian/xvitr.rdef
+@@ -0,0 +1,3 @@
++resource app_signature "application/x-vnd.v-os-xvitruvian";
++
++resource app_flags B_MULTIPLE_LAUNCH | B_BACKGROUND_APP;
