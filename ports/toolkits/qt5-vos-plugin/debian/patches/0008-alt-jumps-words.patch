@@ -1,0 +1,64 @@
+Description: Alt+Left/Right/Backspace/Delete move, select and erase words like Ctrl.
+Author: Dario Casalinuovo
+Origin: vendor
+Forwarded: no
+---
+--- a/platforms/qhaikuplatform/haiku/qhaikutheme.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikutheme.cpp
+@@ -217,6 +217,37 @@ QVariant QHaikuTheme::themeHint(ThemeHint hint) const
+ }
+ 
+ 
++QList<QKeySequence> QHaikuTheme::keyBindings(QKeySequence::StandardKey key) const
++{
++    QList<QKeySequence> bindings = QPlatformTheme::keyBindings(key);
++
++    // Alt jumps words like Ctrl; the Meta (Windows) key does not.
++    switch (key) {
++    case QKeySequence::MoveToNextWord:
++        bindings << QKeySequence(Qt::ALT | Qt::Key_Right);
++        break;
++    case QKeySequence::MoveToPreviousWord:
++        bindings << QKeySequence(Qt::ALT | Qt::Key_Left);
++        break;
++    case QKeySequence::SelectNextWord:
++        bindings << QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Right);
++        break;
++    case QKeySequence::SelectPreviousWord:
++        bindings << QKeySequence(Qt::ALT | Qt::SHIFT | Qt::Key_Left);
++        break;
++    case QKeySequence::DeleteStartOfWord:
++        bindings << QKeySequence(Qt::ALT | Qt::Key_Backspace);
++        break;
++    case QKeySequence::DeleteEndOfWord:
++        bindings << QKeySequence(Qt::ALT | Qt::Key_Delete);
++        break;
++    default:
++        break;
++    }
++    return bindings;
++}
++
++
+ const QFont *QHaikuTheme::font(Font type) const
+ {
+     QPlatformFontDatabase *fontDatabase = m_integration->fontDatabase();
+--- a/platforms/qhaikuplatform/haiku/qhaikutheme.h
++++ b/platforms/qhaikuplatform/haiku/qhaikutheme.h
+@@ -42,6 +42,7 @@
+ #define QHAIKUTHEME_H
+ 
+ #include <qpa/qplatformtheme.h>
++#include <QtGui/qkeysequence.h>
+ #include <qpa/qplatformfontdatabase.h>
+ 
+ #include <QtGui/qfont.h>
+@@ -67,6 +68,8 @@ public:
+     
+     virtual QVariant themeHint(ThemeHint hint) const;
+ 
++    QList<QKeySequence> keyBindings(QKeySequence::StandardKey key) const override;
++
+     const QFont *font(Font type = SystemFont) const;
+ 
+     const QPalette *palette(Palette type = SystemPalette) const;

@@ -1,0 +1,28 @@
+Description: Register with single-launch flags and never block a logout.
+Author: Dario Casalinuovo
+Origin: vendor
+Forwarded: no
+---
+--- a/platforms/qhaikuplatform/haiku/qhaikuapplication.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikuapplication.cpp
+@@ -45,7 +45,7 @@
+ 
+ HQApplication::HQApplication(const char* signature)
+ 	: QObject()
+-	, BApplication(signature)
++	, BApplication(signature, (status_t*)NULL, B_SINGLE_LAUNCH)
+ 	, fClipboard(NULL)
+ 	, qtFlags(0)
+ {
+@@ -135,5 +135,11 @@
+ 
+ bool HQApplication::QuitRequested()
+ {
++	// Never block a logout; windows close through the Qt shutdown path.
++	bool shutdown = false;
++	BMessage* current = CurrentMessage();
++	if (current != NULL && current->FindBool("_shutdown_", &shutdown) == B_OK
++			&& shutdown)
++		return true;
+ 	return Q_EMIT applicationQuit();
+ }

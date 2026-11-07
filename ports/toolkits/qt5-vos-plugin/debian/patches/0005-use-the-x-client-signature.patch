@@ -1,0 +1,38 @@
+Description: Use the V\OS X client library's signature when available, keeping the old scheme as fallback.
+Author: Dario Casalinuovo
+Origin: vendor
+Forwarded: no
+---
+diff --git a/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp b/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp
+index d6c585c..0eaa29f 100644
+--- a/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp
+@@ -61,6 +61,19 @@ QT_BEGIN_INCLUDE_NAMESPACE
+ extern char **environ;
+ QT_END_INCLUDE_NAMESPACE
+ 
++#include <dlfcn.h>
++
++// Same signature the X client library computes for this executable.
++static bool vosClientSignature(const QString &path, char *out, size_t len)
++{
++	typedef int (*SignatureFn)(const char *, char *, size_t);
++	void *lib = dlopen("libvos_x_client.so", RTLD_NOW);
++	if (lib == NULL)
++		return false;
++	SignatureFn fn = (SignatureFn)dlsym(lib, "vos_x_client_signature");
++	return fn != NULL && fn(path.toUtf8().constData(), out, len) == 0;
++}
++
+ QT_BEGIN_NAMESPACE
+ 
+ // The BApplication runs on its own thread; keep its id so the destructor can
+@@ -160,6 +173,8 @@ QHaikuIntegration *QHaikuIntegration::createHaikuIntegration(const QStringList&
+ 
+ 	if (signature[0] != '\0')
+ 		appSignature = QLatin1String(signature);
++	else if (vosClientSignature(appPath, signature, sizeof(signature)))
++		appSignature = QLatin1String(signature);
+ 	else
+ 		appSignature = QLatin1String("application/x-vnd.qt5-") +
+ 			QCoreApplication::applicationName().replace(' ', '_').remove("_x86");

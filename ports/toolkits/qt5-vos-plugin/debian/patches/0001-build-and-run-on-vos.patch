@@ -1,0 +1,238 @@
+Description: Build against vos-dev and run on V\OS: include paths from vos.specs, OpenGL behind an opt-in, font directory probing, evdev key codes and PC-style modifiers.
+Author: Vladislav Janeček <38503981+schotek@users.noreply.github.com>
+Origin: vendor
+Forwarded: no
+---
+diff --git a/platforms/qhaikuplatform/haiku/haiku.pro b/platforms/qhaikuplatform/haiku/haiku.pro
+index cff53bf..aaf5e45 100644
+--- a/platforms/qhaikuplatform/haiku/haiku.pro
++++ b/platforms/qhaikuplatform/haiku/haiku.pro
+@@ -10,6 +10,19 @@ QT += \
+ 
+ LIBS += -lbe -lroot -ltracker -lgame -lGL -lGLU
+ 
++exists(/etc/vos.specs) {
++	# Kit headers come from vos.specs and need the Linux build shim.
++	VOS_INCLUDES = $$system(cat /etc/vos.specs)
++	# vos.specs misses a few kit subdirs the plugin needs directly
++	VOS_INCLUDES += -I/system/develop/headers/os/opengl \
++		-I/system/develop/headers/os/game \
++		-I/system/develop/headers/os/locale
++	QMAKE_CFLAGS += $$VOS_INCLUDES -include LinuxBuildCompatibility.h
++	QMAKE_CXXFLAGS += $$VOS_INCLUDES -include LinuxBuildCompatibility.h
++	# BGLView lives in libopengl.so here (libGL is Mesa's)
++	LIBS += -lopengl
++}
++
+ CONFIG += link_pkgconfig
+ 
+ PKGCONFIG += freetype2
+diff --git a/platforms/qhaikuplatform/haiku/osmesa_bgl.h b/platforms/qhaikuplatform/haiku/osmesa_bgl.h
+index 124e294..8e45f63 100644
+--- a/platforms/qhaikuplatform/haiku/osmesa_bgl.h
++++ b/platforms/qhaikuplatform/haiku/osmesa_bgl.h
+@@ -103,6 +103,11 @@ GLAPI void GLAPIENTRY OSMesaSwapBuffers(OSMesaContext ctx);
+ #include <cstring>
+ #include <algorithm>
+ 
++/* Older GLView.h lacks the shared-context option; degrade to "not requested". */
++#ifndef BGL_SHARE_CONTEXT
++#define BGL_SHARE_CONTEXT 0
++#endif
++
+ struct OSMesaContextRec {
+ 	BGLView* glView;
+ 	void* userBuffer;
+diff --git a/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp b/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp
+index b98b5b1..b8467a4 100644
+--- a/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikuintegration.cpp
+@@ -98,6 +98,10 @@ QHaikuIntegration::~QHaikuIntegration()
+ 
+ bool QHaikuIntegration::isOpenGLEnabled()
+ {
++	// BGLView-backed OSMesa is not validated on V\OS yet: opt-in only.
++	if (!qEnvironmentVariableIntValue("QT_HAIKU_ENABLE_GL"))
++		return false;
++
+ 	image_info imgInfo;
+ 	int32 cookie = 0;
+ 
+diff --git a/platforms/qhaikuplatform/haiku/qhaikuplatformfontdatabase.cpp b/platforms/qhaikuplatform/haiku/qhaikuplatformfontdatabase.cpp
+index e18975f..8471543 100644
+--- a/platforms/qhaikuplatform/haiku/qhaikuplatformfontdatabase.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikuplatformfontdatabase.cpp
+@@ -98,28 +98,36 @@ QString	QHaikuPlatformFontDatabase::fontDir() const
+ 
+ void QHaikuPlatformFontDatabase::populateFontDatabase()
+ {
+-	QString fontpath =	fontDir();
+-
+-	if (!QFile::exists(fontpath)) {
+-		qFatal("QFontDatabase: Cannot find font directory %s - is Qt installed correctly?",
+-			qPrintable(fontpath));
+-	}
+-
+-	BStringList fontPaths;
++	BStringList bePaths;
+ 	BPathFinder::FindPaths(NULL, B_FIND_PATH_FONTS_DIRECTORY,
+-		NULL, B_FIND_PATH_EXISTING_ONLY, fontPaths);
+-
+-	for (int32 i = 0; i < fontPaths.CountStrings(); i++) {
+-		QDir dir(QLatin1String(fontPaths.StringAt(i).String()));
+-		QDirIterator qdi(dir.absolutePath(),
++		NULL, B_FIND_PATH_EXISTING_ONLY, bePaths);
++
++	QStringList fontDirs;
++	for (int32 i = 0; i < bePaths.CountStrings(); i++)
++		fontDirs << QLatin1String(bePaths.StringAt(i).String());
++	// find_paths reports legacy locations that can exist yet hold no fonts,
++	// while V\OS keeps them on FHS paths: probe every candidate.
++	fontDirs << fontDir() << QLatin1String("/usr/share/fonts");
++	fontDirs.removeDuplicates();
++
++	bool populated = false;
++	for (const QString &path : fontDirs) {
++		if (!QFile::exists(path))
++			continue;
++		QDirIterator qdi(path,
+ 			QStringList() << "*.ttf" << "*.otf",
+ 			QDir::Files, QDirIterator::Subdirectories);
+ 		while (qdi.hasNext()) {
+ 			const QByteArray file = QFile::encodeName(qdi.next());
+-			QStringList families = addTTFile(QByteArray(), file);
++			addTTFile(QByteArray(), file);
++			populated = true;
+ 		}
+ 	}
+ 
++	if (!populated)
++		qWarning("QFontDatabase: no fonts found in: %s",
++			qPrintable(fontDirs.join(QLatin1String(", "))));
++
+ 	// Register aliases for generic names
+ 	registerAliasToFontFamily("Noto Sans", "Sans Serif");
+ 	registerAliasToFontFamily("Noto Serif", "Serif");
+diff --git a/platforms/qhaikuplatform/haiku/qhaikuview.cpp b/platforms/qhaikuplatform/haiku/qhaikuview.cpp
+index 0349a86..284fc05 100644
+--- a/platforms/qhaikuplatform/haiku/qhaikuview.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikuview.cpp
+@@ -39,6 +39,7 @@
+ ****************************************************************************/
+ 
+ #include <stdio.h>
++#include <unistd.h>
+ 
+ #include <QGuiApplication>
+ #include <QMimeData>
+@@ -109,6 +110,13 @@ QHaikuSurfaceView::hostToQtButton(uint32 buttons) const
+     return Qt::NoButton;
+ }
+ 
++// V\OS input_server sends PC-style modifiers: Ctrl stays Qt Control.
++static bool vitruvianHostModifiers()
++{
++    static const bool isVitruvian = (access("/dev/nexus", F_OK) == 0);
++    return isVitruvian;
++}
++
+ Qt::KeyboardModifiers
+ QHaikuSurfaceView::hostToQtModifiers(uint32 keyState) const
+ {
+@@ -116,10 +124,17 @@ QHaikuSurfaceView::hostToQtModifiers(uint32 keyState) const
+ 
+     if (keyState & B_SHIFT_KEY)
+         modifiers |= Qt::ShiftModifier;
+-    if (keyState & B_CONTROL_KEY)
+-        modifiers |= Qt::AltModifier;
+-    if (keyState & B_COMMAND_KEY)
+-        modifiers |= Qt::ControlModifier;
++    if (vitruvianHostModifiers()) {
++        if (keyState & B_CONTROL_KEY)
++            modifiers |= Qt::ControlModifier;
++        if (keyState & B_COMMAND_KEY)
++            modifiers |= Qt::AltModifier;
++    } else {
++        if (keyState & B_CONTROL_KEY)
++            modifiers |= Qt::AltModifier;
++        if (keyState & B_COMMAND_KEY)
++            modifiers |= Qt::ControlModifier;
++    }
+ 
+     return modifiers;
+ }
+diff --git a/platforms/qhaikuplatform/haiku/qhaikuwindow.cpp b/platforms/qhaikuplatform/haiku/qhaikuwindow.cpp
+index 928b9b9..fba558e 100644
+--- a/platforms/qhaikuplatform/haiku/qhaikuwindow.cpp
++++ b/platforms/qhaikuplatform/haiku/qhaikuwindow.cpp
+@@ -38,6 +38,8 @@
+ **
+ ****************************************************************************/
+ 
++#include <unistd.h>
++
+ #include "qhaikuwindow.h"
+ #include "qhaikukeymap.h"
+ #include "qhaikusettings.h"
+@@ -64,8 +66,61 @@
+ 
+ QT_BEGIN_NAMESPACE
+ 
++// V\OS input_server sends raw evdev codes in "key", legacy sends keymap codes.
++static bool vitruvianEvdevKeys()
++{
++	static const bool isVitruvian = (access("/dev/nexus", F_OK) == 0);
++	return isVitruvian;
++}
++
++static uint32 translateEvdevKeyCode(uint32 key)
++{
++	static const uint32 map[][2] = {
++		{ 1, Qt::Key_Escape }, { 2, Qt::Key_1 }, { 3, Qt::Key_2 },
++		{ 4, Qt::Key_3 }, { 5, Qt::Key_4 }, { 6, Qt::Key_5 },
++		{ 7, Qt::Key_6 }, { 8, Qt::Key_7 }, { 9, Qt::Key_8 },
++		{ 10, Qt::Key_9 }, { 11, Qt::Key_0 }, { 12, Qt::Key_Minus },
++		{ 13, Qt::Key_Equal }, { 14, Qt::Key_Backspace }, { 15, Qt::Key_Tab },
++		{ 16, Qt::Key_Q }, { 17, Qt::Key_W }, { 18, Qt::Key_E },
++		{ 19, Qt::Key_R }, { 20, Qt::Key_T }, { 21, Qt::Key_Y },
++		{ 22, Qt::Key_U }, { 23, Qt::Key_I }, { 24, Qt::Key_O },
++		{ 25, Qt::Key_P }, { 26, Qt::Key_BracketLeft }, { 27, Qt::Key_BracketRight },
++		{ 28, Qt::Key_Return }, { 29, Qt::Key_Control }, { 30, Qt::Key_A },
++		{ 31, Qt::Key_S }, { 32, Qt::Key_D }, { 33, Qt::Key_F },
++		{ 34, Qt::Key_G }, { 35, Qt::Key_H }, { 36, Qt::Key_J },
++		{ 37, Qt::Key_K }, { 38, Qt::Key_L }, { 39, Qt::Key_Semicolon },
++		{ 40, Qt::Key_Apostrophe }, { 41, Qt::Key_QuoteLeft }, { 42, Qt::Key_Shift },
++		{ 43, Qt::Key_Backslash }, { 44, Qt::Key_Z }, { 45, Qt::Key_X },
++		{ 46, Qt::Key_C }, { 47, Qt::Key_V }, { 48, Qt::Key_B },
++		{ 49, Qt::Key_N }, { 50, Qt::Key_M }, { 51, Qt::Key_Comma },
++		{ 52, Qt::Key_Period }, { 53, Qt::Key_Slash }, { 54, Qt::Key_Shift },
++		{ 55, Qt::Key_Asterisk }, { 56, Qt::Key_Alt }, { 57, Qt::Key_Space },
++		{ 58, Qt::Key_CapsLock }, { 59, Qt::Key_F1 }, { 60, Qt::Key_F2 },
++		{ 61, Qt::Key_F3 }, { 62, Qt::Key_F4 }, { 63, Qt::Key_F5 },
++		{ 64, Qt::Key_F6 }, { 65, Qt::Key_F7 }, { 66, Qt::Key_F8 },
++		{ 67, Qt::Key_F9 }, { 68, Qt::Key_F10 }, { 69, Qt::Key_NumLock },
++		{ 70, Qt::Key_ScrollLock }, { 87, Qt::Key_F11 }, { 88, Qt::Key_F12 },
++		{ 96, Qt::Key_Enter }, { 97, Qt::Key_Control }, { 98, Qt::Key_Slash },
++		{ 99, Qt::Key_Print }, { 100, Qt::Key_AltGr }, { 102, Qt::Key_Home },
++		{ 103, Qt::Key_Up }, { 104, Qt::Key_PageUp }, { 105, Qt::Key_Left },
++		{ 106, Qt::Key_Right }, { 107, Qt::Key_End }, { 108, Qt::Key_Down },
++		{ 109, Qt::Key_PageDown }, { 110, Qt::Key_Insert }, { 111, Qt::Key_Delete },
++		{ 119, Qt::Key_Pause }, { 125, Qt::Key_Meta }, { 127, Qt::Key_Menu },
++		{ 0, 0 }
++	};
++	for (uint32 i = 0; map[i][0]; i++) {
++		if (map[i][0] == key)
++			return map[i][1];
++	}
++	return Qt::Key_unknown;
++}
++
++
+ static uint32 translateKeyCode(uint32 key)
+ {
++	if (vitruvianEvdevKeys())
++		return translateEvdevKeyCode(key);
++
+ 	uint32 code = Qt::Key_unknown;
+ 	uint32 i = 0;
+ 	if ( modifiers() & B_NUM_LOCK ) {

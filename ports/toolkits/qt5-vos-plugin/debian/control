@@ -1,0 +1,17 @@
+Source: qt5-vos-plugin
+Section: libs
+Priority: optional
+Maintainer: The Vitruvian Project <packages@v-os.dev>
+Build-Depends: debhelper-compat (= 13), dh-vos, qtbase5-dev, qtbase5-private-dev,
+ libfreetype-dev, libgl-dev, libglu1-mesa-dev, pkgconf
+Standards-Version: 4.7.2
+Rules-Requires-Root: no
+Homepage: https://github.com/threedeyes/qthaikuplugins
+
+Package: qt5-vos-plugin
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: Qt 5 platform plugin for V\OS
+ Runs Qt 5 applications as native V\OS applications: windows, menus,
+ file dialogs, clipboard and keyboard go through the V\OS kits instead
+ of X11 or Wayland.
