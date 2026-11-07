@@ -1,0 +1,62 @@
+Description: Follow the ctrl-mode modifier roles and keep legacy key codes up to 0x7f.
+Author: Dario Casalinuovo
+Origin: vendor
+Forwarded: no
+---
+diff --git a/src/platform/qhaikuview.cpp b/src/platform/qhaikuview.cpp
+index 2dbf3db..9d28b68 100644
+--- a/src/platform/qhaikuview.cpp
++++ b/src/platform/qhaikuview.cpp
+@@ -111,15 +111,6 @@ QHaikuSurfaceView::hostToQtButton(uint32 buttons) const
+     return Qt::NoButton;
+ }
+ 
+-// Vitruvian's input_server reports PC-style modifiers: the physical Ctrl
+-// key arrives as B_CONTROL_KEY and must stay Qt Control (classic Haiku
+-// puts the shortcut role on B_COMMAND_KEY instead).
+-static bool vitruvianHostModifiers()
+-{
+-    static const bool isVitruvian = (access("/dev/nexus", F_OK) == 0);
+-    return isVitruvian;
+-}
+-
+ Qt::KeyboardModifiers
+ QHaikuSurfaceView::hostToQtModifiers(uint32 keyState) const
+ {
+@@ -127,17 +118,11 @@ QHaikuSurfaceView::hostToQtModifiers(uint32 keyState) const
+ 
+     if (keyState & B_SHIFT_KEY)
+         modifiers |= Qt::ShiftModifier;
+-    if (vitruvianHostModifiers()) {
+-        if (keyState & B_CONTROL_KEY)
+-            modifiers |= Qt::ControlModifier;
+-        if (keyState & B_COMMAND_KEY)
+-            modifiers |= Qt::AltModifier;
+-    } else {
+-        if (keyState & B_CONTROL_KEY)
+-            modifiers |= Qt::AltModifier;
+-        if (keyState & B_COMMAND_KEY)
+-            modifiers |= Qt::ControlModifier;
+-    }
++    // ctrl-mode puts the physical Ctrl on B_COMMAND_KEY, as legacy does.
++    if (keyState & B_CONTROL_KEY)
++        modifiers |= Qt::AltModifier;
++    if (keyState & B_COMMAND_KEY)
++        modifiers |= Qt::ControlModifier;
+ 
+     return modifiers;
+ }
+diff --git a/src/platform/qhaikuwindow.cpp b/src/platform/qhaikuwindow.cpp
+index fadca87..a3b2360 100644
+--- a/src/platform/qhaikuwindow.cpp
++++ b/src/platform/qhaikuwindow.cpp
+@@ -117,7 +117,8 @@ static uint32 translateEvdevKeyCode(uint32 key)
+ 
+ static uint32 translateKeyCode(uint32 key)
+ {
+-	if (vitruvianEvdevKeys())
++	// Legacy codes up to 0x7f; raw evdev only above.
++	if (vitruvianEvdevKeys() && key >= 0x80)
+ 		return translateEvdevKeyCode(key);
+ 
+ 	uint32 code = Qt::Key_unknown;

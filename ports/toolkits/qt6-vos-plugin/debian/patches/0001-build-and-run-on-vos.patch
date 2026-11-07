@@ -281,21 +281,6 @@ index 9eda27b..fadca87 100644
  	uint32 code = Qt::Key_unknown;
  	uint32 i = 0;
  	if ( modifiers() & B_NUM_LOCK ) {
-@@ -169,6 +223,14 @@ void QtHaikuWindow::DispatchMessage(BMessage *msg, BHandler *handler)
- 				if(msg->FindString("bytes", &bytes) == B_OK)
- 					text = QString::fromUtf8(bytes);
- 				uint32 qt_keycode = translateKeyCode(key);
-+				if (access("/tmp/qkeys-on", F_OK) == 0) {
-+					if (FILE *klog = fopen("/tmp/qkeys.log", "a")) {
-+						fprintf(klog, "[qhaiku] key what=0x%x raw=0x%x qt=0x%x mods=0x%x bytes='%s'\n",
-+							(unsigned)msg->what, (unsigned)key, (unsigned)qt_keycode,
-+							(unsigned)modifiers, text.toUtf8().constData());
-+						fclose(klog);
-+					}
-+				}
- 				if (qt_keycode == Qt::Key_Print)
- 					break;
- 				if (qt_keycode == Qt::Key_Tab && modifiers & B_CONTROL_KEY)
 -- 
 2.47.3
 
