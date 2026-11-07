@@ -1,0 +1,33 @@
+--- a/debian/control	2026-11-07 09:57:55.862236598 +0100
++++ b/debian/control	2026-11-07 10:14:59.274573215 +0100
+@@ -45,6 +45,7 @@
+  pkgconf,
+  wayland-protocols,
+  xxd,
++ vos-dev,
+ Build-Depends-Indep:
+  graphviz <!nodoc>,
+  doxygen <!nodoc>,
+@@ -60,7 +61,8 @@
+  ${misc:Pre-Depends}
+ Depends:
+  ${misc:Depends},
+- ${shlibs:Depends}
++ ${shlibs:Depends},
++ vos
+ Recommends:
+  libdbus-1-3,
+  libegl1,
+--- a/debian/rules	2026-11-07 10:06:19.022306482 +0100
++++ b/debian/rules	2026-11-07 10:06:19.030306485 +0100
+@@ -94,6 +94,10 @@
+ 	cp debian/placeholders/testgpu_*.h test/testgpu/
+ 	dh_auto_configure -- $(confflags)
+ 
++# The tests link libbe, which needs the V\OS kernel interface.
++override_dh_auto_test:
++	:
++
+ execute_after_dh_auto_build:
+ ifneq ($(filter %-doc,$(built_binaries)),)
+ 	sed -e 's/FULL_PATH_NAMES *=.*/FULL_PATH_NAMES = NO/' < docs/doxyfile > debian/Doxyfile

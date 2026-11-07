@@ -1,0 +1,1212 @@
+Description: V\OS video backend for SDL3 on BSurface, with an EGL pbuffer OpenGL path.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+---
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3000,6 +3000,37 @@
+ 
+ # Platform-independent options
+ 
++# V\OS video backend, built when the V\OS headers are installed.
++option(SDL_VOS "Build the V\\OS video backend when its headers are found" ON)
++if(SDL_VIDEO AND SDL_VOS AND UNIX AND NOT APPLE AND NOT ANDROID)
++  find_path(VOS_SURFACE_DIR Surface.h
++            PATHS /system/develop/headers/private/interface
++            NO_DEFAULT_PATH)
++  find_package(PkgConfig QUIET)
++  if(VOS_SURFACE_DIR AND PKG_CONFIG_FOUND)
++    pkg_check_modules(VOS_PC vos)
++  endif()
++  if(VOS_SURFACE_DIR AND VOS_PC_FOUND)
++    enable_language(CXX)
++    set(SDL_VIDEO_DRIVER_VOS 1)
++    sdl_glob_sources("${SDL3_SOURCE_DIR}/src/video/vos/*.cc")
++    get_filename_component(VOS_PRIVATE_DIR "${VOS_SURFACE_DIR}" DIRECTORY)
++    set(VOS_CXX_FLAGS)
++    foreach(dir "${VOS_PRIVATE_DIR}" "${VOS_PRIVATE_DIR}/app" "${VOS_PRIVATE_DIR}/interface"
++                "${VOS_PRIVATE_DIR}/shared" "${VOS_PRIVATE_DIR}/system" ${VOS_PC_INCLUDE_DIRS})
++      list(APPEND VOS_CXX_FLAGS "-isystem" "${dir}")
++    endforeach()
++    list(APPEND VOS_CXX_FLAGS "-include" "LinuxBuildCompatibility.h")
++    string(JOIN " " VOS_CXX_FLAGS ${VOS_CXX_FLAGS})
++    sdl_compile_options(PRIVATE NO_EXPORT "$<$<COMPILE_LANGUAGE:CXX>:SHELL:${VOS_CXX_FLAGS}>")
++    sdl_link_dependency(vos LIBS be root)
++    set(HAVE_SDL_VIDEO TRUE)
++    message(STATUS "V\\OS video backend: enabled (${VOS_SURFACE_DIR})")
++  else()
++    message(STATUS "V\\OS video backend: V\\OS headers not found, disabled")
++  endif()
++endif()
++
+ if(SDL_VIDEO)
+   if(SDL_OFFSCREEN)
+     set(SDL_VIDEO_DRIVER_OFFSCREEN 1)
+diff --git a/include/build_config/SDL_build_config.h.cmake b/include/build_config/SDL_build_config.h.cmake
+--- a/include/build_config/SDL_build_config.h.cmake
++++ b/include/build_config/SDL_build_config.h.cmake
+@@ -361,6 +361,7 @@
+ #cmakedefine SDL_VIDEO_DRIVER_EMSCRIPTEN 1
+ #cmakedefine SDL_VIDEO_DRIVER_HAIKU 1
+ #cmakedefine SDL_VIDEO_DRIVER_KMSDRM 1
++#cmakedefine SDL_VIDEO_DRIVER_VOS 1
+ #cmakedefine SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC @SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC@
+ #cmakedefine SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM @SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM@
+ #cmakedefine SDL_VIDEO_DRIVER_N3DS 1
+diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
+--- a/src/video/SDL_sysvideo.h
++++ b/src/video/SDL_sysvideo.h
+@@ -515,6 +515,7 @@
+ extern VideoBootStrap X11_bootstrap;
+ extern VideoBootStrap WINDOWS_bootstrap;
+ extern VideoBootStrap HAIKU_bootstrap;
++extern VideoBootStrap VOS_bootstrap;
+ extern VideoBootStrap UIKIT_bootstrap;
+ extern VideoBootStrap Android_bootstrap;
+ extern VideoBootStrap PS2_bootstrap;
+diff --git a/src/video/SDL_video.c b/src/video/SDL_video.c
+--- a/src/video/SDL_video.c
++++ b/src/video/SDL_video.c
+@@ -83,6 +83,9 @@
+ #ifdef SDL_VIDEO_DRIVER_COCOA
+     &COCOA_bootstrap,
+ #endif
++#ifdef SDL_VIDEO_DRIVER_VOS
++    &VOS_bootstrap,
++#endif
+ #ifdef SDL_VIDEO_DRIVER_X11
+ #ifdef SDL_VIDEO_DRIVER_WAYLAND
+     &Wayland_preferred_bootstrap,
+diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
+--- /dev/null
++++ b/src/video/vos/SDL_vosopengl.cc
+@@ -0,0 +1,351 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++#include "SDL_internal.h"
++
++#if defined(SDL_VIDEO_DRIVER_VOS) && defined(SDL_VIDEO_OPENGL_EGL)
++
++#include <Surface.h>
++
++#include <EGL/egl.h>
++#include <EGL/eglext.h>
++#include <dlfcn.h>
++#include <stdlib.h>
++#include <string.h>
++
++extern "C" {
++#include "../SDL_sysvideo.h"
++}
++#include "SDL_vosvideo.h"
++
++// Rendering goes to an EGL pbuffer per window on the surfaceless platform;
++// SwapWindow reads it back into the surface buffer.
++
++#define GL_FRAMEBUFFER 0x8D40
++#define GL_READ_FRAMEBUFFER 0x8CA8
++#define GL_FRAMEBUFFER_BINDING 0x8CA6
++#define GL_READ_FRAMEBUFFER_BINDING 0x8CAA
++#define GL_RGBA 0x1908
++#define GL_UNSIGNED_BYTE 0x1401
++
++typedef void (*PFN_glReadPixels)(int, int, int, int, unsigned, unsigned, void *);
++typedef void (*PFN_glBindFramebuffer)(unsigned, unsigned);
++typedef void (*PFN_glGetIntegerv)(unsigned, int *);
++
++static void *sGLHandle;
++static void *sGLESHandle;
++static EGLContext sCurrentContext = EGL_NO_CONTEXT;
++static SDL_Window *sCurrentWindow = NULL;
++static bool sCurrentIsES = false;
++static int sCurrentMajor = 0;
++
++static EGLDisplay Display(SDL_VideoDevice *_this)
++{
++    return (EGLDisplay)_this->internal->eglDisplay;
++}
++
++bool VOS_GL_LoadLibrary(SDL_VideoDevice *_this, const char *path)
++{
++    SDL_VideoData *vd = _this->internal;
++    if (vd->eglDisplay) {
++        return true;
++    }
++
++    EGLDisplay display = EGL_NO_DISPLAY;
++    PFNEGLGETPLATFORMDISPLAYEXTPROC getPlatformDisplay =
++        (PFNEGLGETPLATFORMDISPLAYEXTPROC)eglGetProcAddress("eglGetPlatformDisplayEXT");
++    if (getPlatformDisplay) {
++        display = getPlatformDisplay(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
++    }
++    if (display == EGL_NO_DISPLAY) {
++        display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
++    }
++    EGLint major, minor;
++    if (display == EGL_NO_DISPLAY || !eglInitialize(display, &major, &minor)) {
++        return SDL_SetError("Could not initialize EGL");
++    }
++    vd->eglDisplay = display;
++    vd->swapInterval = 1;
++    _this->gl_config.driver_loaded = 1;
++    return true;
++}
++
++void VOS_GL_UnloadLibrary(SDL_VideoDevice *_this)
++{
++    SDL_VideoData *vd = _this->internal;
++    if (vd->eglDisplay) {
++        eglTerminate((EGLDisplay)vd->eglDisplay);
++        vd->eglDisplay = NULL;
++        vd->eglConfig = NULL;
++    }
++    _this->gl_config.driver_loaded = 0;
++}
++
++SDL_FunctionPointer VOS_GL_GetProcAddress(SDL_VideoDevice *_this, const char *proc)
++{
++    // Core entry points too: eglGetProcAddress resolves them on EGL 1.5.
++    SDL_FunctionPointer fn = (SDL_FunctionPointer)eglGetProcAddress(proc);
++    if (fn) {
++        return fn;
++    }
++    if (!sGLHandle) {
++        sGLHandle = dlopen("libGL.so.1", RTLD_LAZY | RTLD_GLOBAL);
++    }
++    if (sGLHandle && (fn = (SDL_FunctionPointer)dlsym(sGLHandle, proc))) {
++        return fn;
++    }
++    if (!sGLESHandle) {
++        sGLESHandle = dlopen("libGLESv2.so.2", RTLD_LAZY | RTLD_GLOBAL);
++    }
++    if (sGLESHandle) {
++        return (SDL_FunctionPointer)dlsym(sGLESHandle, proc);
++    }
++    return NULL;
++}
++
++static bool ChooseConfig(SDL_VideoDevice *_this, bool es)
++{
++    SDL_VideoData *vd = _this->internal;
++    EGLint renderable = EGL_OPENGL_BIT;
++    if (es) {
++        renderable = (_this->gl_config.major_version >= 3) ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_ES2_BIT;
++    }
++    EGLint attribs[] = {
++        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
++        EGL_RENDERABLE_TYPE, renderable,
++        EGL_RED_SIZE, _this->gl_config.red_size > 0 ? _this->gl_config.red_size : 8,
++        EGL_GREEN_SIZE, _this->gl_config.green_size > 0 ? _this->gl_config.green_size : 8,
++        EGL_BLUE_SIZE, _this->gl_config.blue_size > 0 ? _this->gl_config.blue_size : 8,
++        EGL_ALPHA_SIZE, _this->gl_config.alpha_size > 0 ? _this->gl_config.alpha_size : 8,
++        EGL_DEPTH_SIZE, _this->gl_config.depth_size,
++        EGL_STENCIL_SIZE, _this->gl_config.stencil_size,
++        EGL_SAMPLE_BUFFERS, _this->gl_config.multisamplebuffers,
++        EGL_SAMPLES, _this->gl_config.multisamplesamples,
++        EGL_NONE
++    };
++    EGLConfig config;
++    EGLint count = 0;
++    if (!eglChooseConfig(Display(_this), attribs, &config, 1, &count) || count < 1) {
++        return SDL_SetError("No matching EGL pbuffer config");
++    }
++    vd->eglConfig = config;
++    return true;
++}
++
++SDL_GLContext VOS_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    SDL_VideoData *vd = _this->internal;
++    if (!vd->eglDisplay && !VOS_GL_LoadLibrary(_this, NULL)) {
++        return NULL;
++    }
++
++    bool es = _this->gl_config.profile_mask == SDL_GL_CONTEXT_PROFILE_ES;
++    if (!eglBindAPI(es ? EGL_OPENGL_ES_API : EGL_OPENGL_API)) {
++        SDL_SetError("eglBindAPI failed");
++        return NULL;
++    }
++    if (!ChooseConfig(_this, es)) {
++        return NULL;
++    }
++
++    EGLint attribs[16];
++    int n = 0;
++    if (es || _this->gl_config.profile_mask == SDL_GL_CONTEXT_PROFILE_CORE
++            || _this->gl_config.major_version > 2) {
++        attribs[n++] = EGL_CONTEXT_MAJOR_VERSION;
++        attribs[n++] = _this->gl_config.major_version;
++        attribs[n++] = EGL_CONTEXT_MINOR_VERSION;
++        attribs[n++] = _this->gl_config.minor_version;
++    }
++    if (!es && _this->gl_config.profile_mask == SDL_GL_CONTEXT_PROFILE_CORE) {
++        attribs[n++] = EGL_CONTEXT_OPENGL_PROFILE_MASK;
++        attribs[n++] = EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT;
++    }
++    if (_this->gl_config.flags & SDL_GL_CONTEXT_DEBUG_FLAG) {
++        attribs[n++] = EGL_CONTEXT_OPENGL_DEBUG;
++        attribs[n++] = EGL_TRUE;
++    }
++    attribs[n++] = EGL_NONE;
++
++    EGLContext share = _this->gl_config.share_with_current_context ? eglGetCurrentContext() : EGL_NO_CONTEXT;
++    EGLContext context = eglCreateContext(Display(_this), (EGLConfig)vd->eglConfig, share, attribs);
++    if (context == EGL_NO_CONTEXT) {
++        SDL_SetError("eglCreateContext failed (0x%x)", eglGetError());
++        return NULL;
++    }
++    if (!VOS_GL_MakeCurrent(_this, window, (SDL_GLContext)context)) {
++        eglDestroyContext(Display(_this), context);
++        return NULL;
++    }
++    sCurrentIsES = es;
++    sCurrentMajor = _this->gl_config.major_version;
++    return (SDL_GLContext)context;
++}
++
++static bool EnsurePbuffer(SDL_VideoDevice *_this, SDL_Window *window, int w, int h)
++{
++    SDL_WindowData *data = window->internal;
++    if (data->pbuffer && data->pbufferW == w && data->pbufferH == h) {
++        return true;
++    }
++    EGLint attribs[] = { EGL_WIDTH, w, EGL_HEIGHT, h, EGL_NONE };
++    EGLSurface surface = eglCreatePbufferSurface(Display(_this), (EGLConfig)_this->internal->eglConfig, attribs);
++    if (surface == EGL_NO_SURFACE) {
++        return SDL_SetError("eglCreatePbufferSurface failed (0x%x)", eglGetError());
++    }
++    if (data->pbuffer) {
++        // Rebinds below if it was the current surface.
++        if (eglGetCurrentSurface(EGL_DRAW) == (EGLSurface)data->pbuffer && sCurrentContext != EGL_NO_CONTEXT) {
++            eglMakeCurrent(Display(_this), surface, surface, sCurrentContext);
++        }
++        eglDestroySurface(Display(_this), (EGLSurface)data->pbuffer);
++    }
++    data->pbuffer = surface;
++    data->pbufferW = w;
++    data->pbufferH = h;
++    return true;
++}
++
++void VOS_GL_WindowResized(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    // Recreate right away: a later recreate at swap time would drop what
++    // the app rendered after the resize event.
++    SDL_WindowData *data = window->internal;
++    void *bits;
++    int pitch, w, h;
++    if (data && data->pbuffer && _this->internal->eglDisplay
++            && VOS_GetWindowBuffer(window, &bits, &pitch, &w, &h)) {
++        EnsurePbuffer(_this, window, w, h);
++    }
++}
++
++bool VOS_GL_MakeCurrent(SDL_VideoDevice *_this, SDL_Window *window, SDL_GLContext context)
++{
++    EGLDisplay display = Display(_this);
++    if (!window || !context) {
++        sCurrentContext = EGL_NO_CONTEXT;
++        sCurrentWindow = NULL;
++        return eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) == EGL_TRUE;
++    }
++
++    void *bits;
++    int pitch, w, h;
++    if (!VOS_GetWindowBuffer(window, &bits, &pitch, &w, &h)) {
++        return SDL_SetError("No surface buffer");
++    }
++    if (!EnsurePbuffer(_this, window, w, h)) {
++        return false;
++    }
++    EGLSurface surface = (EGLSurface)window->internal->pbuffer;
++    if (!eglMakeCurrent(display, surface, surface, (EGLContext)context)) {
++        return SDL_SetError("eglMakeCurrent failed (0x%x)", eglGetError());
++    }
++    sCurrentContext = (EGLContext)context;
++    sCurrentWindow = window;
++    return true;
++}
++
++bool VOS_GL_SetSwapInterval(SDL_VideoDevice *_this, int interval)
++{
++    _this->internal->swapInterval = interval;
++    return true;
++}
++
++bool VOS_GL_GetSwapInterval(SDL_VideoDevice *_this, int *interval)
++{
++    *interval = _this->internal->swapInterval;
++    return true;
++}
++
++bool VOS_GL_SwapWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    void *bits;
++    int pitch, w, h;
++    if (!VOS_GetWindowBuffer(window, &bits, &pitch, &w, &h)) {
++        return false;
++    }
++    if (sCurrentContext == EGL_NO_CONTEXT) {
++        return SDL_SetError("No current GL context");
++    }
++    if (!EnsurePbuffer(_this, window, w, h)) {
++        return false;
++    }
++    SDL_WindowData *data = window->internal;
++    if (eglGetCurrentSurface(EGL_DRAW) != (EGLSurface)data->pbuffer
++            && !eglMakeCurrent(Display(_this), (EGLSurface)data->pbuffer, (EGLSurface)data->pbuffer, sCurrentContext)) {
++        return SDL_SetError("eglMakeCurrent failed");
++    }
++
++    PFN_glReadPixels readPixels = (PFN_glReadPixels)eglGetProcAddress("glReadPixels");
++    PFN_glBindFramebuffer bindFramebuffer = (PFN_glBindFramebuffer)eglGetProcAddress("glBindFramebuffer");
++    PFN_glGetIntegerv getIntegerv = (PFN_glGetIntegerv)eglGetProcAddress("glGetIntegerv");
++    if (!readPixels) {
++        return SDL_SetError("glReadPixels unavailable");
++    }
++
++    // Read the window framebuffer, then give the app its binding back.
++    bool haveRead = !sCurrentIsES || sCurrentMajor >= 3;
++    unsigned target = haveRead ? GL_READ_FRAMEBUFFER : GL_FRAMEBUFFER;
++    int saved = 0;
++    if (bindFramebuffer && getIntegerv) {
++        getIntegerv(haveRead ? GL_READ_FRAMEBUFFER_BINDING : GL_FRAMEBUFFER_BINDING, &saved);
++        bindFramebuffer(target, 0);
++    }
++
++    size_t rowBytes = (size_t)w * 4;
++    Uint8 *tmp = (Uint8 *)SDL_malloc(rowBytes * h);
++    if (!tmp) {
++        return false;
++    }
++    readPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, tmp);
++
++    if (bindFramebuffer && getIntegerv) {
++        bindFramebuffer(target, (unsigned)saved);
++    }
++
++    // GL is bottom-up and RGBA; the surface is top-down BGRA.
++    for (int y = 0; y < h; y++) {
++        const Uint8 *src = tmp + (size_t)(h - 1 - y) * rowBytes;
++        Uint8 *dst = (Uint8 *)bits + (size_t)y * pitch;
++        for (int x = 0; x < w; x++) {
++            dst[x * 4 + 0] = src[x * 4 + 2];
++            dst[x * 4 + 1] = src[x * 4 + 1];
++            dst[x * 4 + 2] = src[x * 4 + 0];
++            dst[x * 4 + 3] = 0xff;
++        }
++    }
++    SDL_free(tmp);
++
++    VOS_PresentWindow(window);
++    return true;
++}
++
++bool VOS_GL_DestroyContext(SDL_VideoDevice *_this, SDL_GLContext context)
++{
++    if ((EGLContext)context == sCurrentContext) {
++        eglMakeCurrent(Display(_this), EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
++        sCurrentContext = EGL_NO_CONTEXT;
++        sCurrentWindow = NULL;
++    }
++    eglDestroyContext(Display(_this), (EGLContext)context);
++    return true;
++}
++
++void VOS_GL_WindowDestroyed(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    SDL_WindowData *data = window->internal;
++    if (data && data->pbuffer && _this->internal->eglDisplay) {
++        if (sCurrentWindow == window) {
++            eglMakeCurrent(Display(_this), EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
++            sCurrentWindow = NULL;
++            sCurrentContext = EGL_NO_CONTEXT;
++        }
++        eglDestroySurface(Display(_this), (EGLSurface)data->pbuffer);
++        data->pbuffer = NULL;
++    }
++}
++
++#else
++// Without EGL there is no GL path.
++#endif
+diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
+--- /dev/null
++++ b/src/video/vos/SDL_vosvideo.cc
+@@ -0,0 +1,698 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++#include "SDL_internal.h"
++
++#ifdef SDL_VIDEO_DRIVER_VOS
++
++#include <Application.h>
++#include <Message.h>
++#include <OS.h>
++#include <Screen.h>
++#include <Surface.h>
++#include <Bitmap.h>
++
++#include <errno.h>
++#include <poll.h>
++#include <fcntl.h>
++#include <unistd.h>
++
++#include <new>
++
++extern "C" {
++#include "../SDL_sysvideo.h"
++#include "../SDL_pixels_c.h"
++#include "../../events/SDL_events_c.h"
++#include "../../events/SDL_keyboard_c.h"
++#include "../../events/SDL_mouse_c.h"
++#include "../../events/SDL_scancode_tables_c.h"
++#include "../../events/SDL_windowevents_c.h"
++}
++#include "SDL_vosvideo.h"
++
++// Pixel size of a decoration: tab and border, for zooming.
++static const float kBorder = 5;
++static const float kTab = 22;
++
++enum {
++    kButtonLeft = 1,
++    kButtonRight = 2,
++    kButtonMiddle = 4
++};
++
++
++static BRect FrameFor(int x, int y, int w, int h)
++{
++    // Frame semantics: right and bottom are inclusive.
++    return BRect(x, y, x + w - 1, y + h - 1);
++}
++
++static void UpdateEventMask(SDL_WindowData *data, bool grab)
++{
++    SDL_Mouse *mouse = SDL_GetMouse();
++    bool want = grab || (mouse && mouse->relative_mode);
++    if (want == data->pointerEvents) {
++        return;
++    }
++    data->pointerEvents = want;
++    if (want) {
++        data->surface->SetEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
++    } else {
++        data->surface->SetEventMask(0, 0);
++    }
++}
++
++//  MARK: - Display
++
++static bool VOS_InitModes(SDL_VideoDevice *_this)
++{
++    BRect frame = BScreen(B_MAIN_SCREEN_ID).Frame();
++    SDL_DisplayMode mode;
++    SDL_zero(mode);
++    mode.format = SDL_PIXELFORMAT_XRGB8888;
++    mode.w = (int)frame.IntegerWidth() + 1;
++    mode.h = (int)frame.IntegerHeight() + 1;
++    mode.refresh_rate = 60.0f;
++    return SDL_AddBasicVideoDisplay(&mode) != 0;
++}
++
++static bool VOS_GetDisplayBounds(SDL_VideoDevice *_this, SDL_VideoDisplay *display, SDL_Rect *rect)
++{
++    BRect frame = BScreen(B_MAIN_SCREEN_ID).Frame();
++    rect->x = (int)frame.left;
++    rect->y = (int)frame.top;
++    rect->w = (int)frame.IntegerWidth() + 1;
++    rect->h = (int)frame.IntegerHeight() + 1;
++    return true;
++}
++
++//  MARK: - Windows
++
++static bool VOS_CreateWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_PropertiesID create_props)
++{
++    SDL_WindowData *data = new (std::nothrow) SDL_WindowData();
++    if (!data) {
++        return false;
++    }
++    data->fd = -1;
++    data->buttons = 0;
++    data->zoomed = data->fullscreen = data->pointerEvents = false;
++    data->lastX = data->lastY = 0;
++    data->window = window;
++    data->pbuffer = NULL;
++    data->pbufferW = data->pbufferH = 0;
++
++    uint32 flags = 0;
++    if (!(window->flags & SDL_WINDOW_RESIZABLE)) {
++        flags |= B_NOT_RESIZABLE | B_NOT_ZOOMABLE;
++    }
++    data->look = (window->flags & SDL_WINDOW_BORDERLESS) ? B_NO_BORDER_WINDOW_LOOK : B_TITLED_WINDOW_LOOK;
++
++    data->surface = new (std::nothrow) BSurface(FrameFor(window->x, window->y, window->w, window->h),
++                                                window->title ? window->title : "", data->look,
++                                                B_NORMAL_WINDOW_FEEL, flags);
++    if (!data->surface || data->surface->InitCheck() != B_OK) {
++        delete data->surface;
++        delete data;
++        return SDL_SetError("Could not create a V\\OS surface");
++    }
++    data->fd = port_to_fd(data->surface->EventPort());
++    window->internal = data;
++    return true;
++}
++
++static void VOS_DestroyWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    SDL_WindowData *data = window->internal;
++    if (!data) {
++        return;
++    }
++#ifdef SDL_VIDEO_OPENGL_EGL
++    VOS_GL_WindowDestroyed(_this, window);
++#endif
++    if (data->fd >= 0) {
++        close(data->fd);
++    }
++    delete data->surface;
++    delete data;
++    window->internal = NULL;
++}
++
++static void VOS_SetWindowTitle(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->SetTitle(window->title ? window->title : "");
++}
++
++static bool VOS_SetWindowPosition(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->MoveTo(BPoint(window->floating.x, window->floating.y));
++    return true;
++}
++
++static void VOS_SetWindowSize(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->ResizeTo(window->floating.w - 1, window->floating.h - 1);
++}
++
++static void VOS_ShowWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->Show();
++}
++
++static void VOS_HideWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->Hide();
++}
++
++static void VOS_RaiseWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->Activate(true);
++}
++
++static void Zoom(SDL_WindowData *data)
++{
++    BSurface *surface = data->surface;
++    if (data->zoomed) {
++        surface->MoveTo(data->restoreFrame.LeftTop());
++        surface->ResizeTo(data->restoreFrame.Width(), data->restoreFrame.Height());
++        data->zoomed = false;
++        SDL_SendWindowEvent(data->window, SDL_EVENT_WINDOW_RESTORED, 0, 0);
++        return;
++    }
++    data->restoreFrame = surface->Frame();
++    BRect screen = BScreen(B_MAIN_SCREEN_ID).Frame();
++    surface->MoveTo(BPoint(screen.left + kBorder, screen.top + kTab));
++    surface->ResizeTo(screen.Width() - 2 * kBorder, screen.Height() - kTab - kBorder);
++    data->zoomed = true;
++    SDL_SendWindowEvent(data->window, SDL_EVENT_WINDOW_MAXIMIZED, 0, 0);
++}
++
++static void VOS_MaximizeWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    if (!window->internal->zoomed) {
++        Zoom(window->internal);
++    }
++}
++
++static void VOS_MinimizeWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    window->internal->surface->Minimize(true);
++}
++
++static void VOS_RestoreWindow(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    SDL_WindowData *data = window->internal;
++    if (data->zoomed) {
++        Zoom(data);
++    } else {
++        data->surface->Minimize(false);
++    }
++}
++
++static void VOS_SetWindowBordered(SDL_VideoDevice *_this, SDL_Window *window, bool bordered)
++{
++    SDL_WindowData *data = window->internal;
++    data->look = bordered ? B_TITLED_WINDOW_LOOK : B_NO_BORDER_WINDOW_LOOK;
++    if (!data->fullscreen) {
++        data->surface->SetLook(data->look);
++    }
++}
++
++static void VOS_SetWindowResizable(SDL_VideoDevice *_this, SDL_Window *window, bool resizable)
++{
++    uint32 flags = resizable ? 0 : (B_NOT_RESIZABLE | B_NOT_ZOOMABLE);
++    window->internal->surface->SetFlags(flags);
++}
++
++static void ReportFrame(SDL_WindowData *data)
++{
++    // The cached frame is already final, so the buffer and GL surface can
++    // follow now instead of waiting for the server's resize event.
++    BRect frame = data->surface->Frame();
++    SDL_Window *window = data->window;
++    SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_MOVED, (int)frame.left, (int)frame.top);
++#ifdef SDL_VIDEO_OPENGL_EGL
++    VOS_GL_WindowResized(SDL_GetVideoDevice(), window);
++#endif
++    SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, (int)frame.IntegerWidth() + 1, (int)frame.IntegerHeight() + 1);
++    SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_EXPOSED, 0, 0);
++}
++
++static SDL_FullscreenResult VOS_SetWindowFullscreen(SDL_VideoDevice *_this, SDL_Window *window, SDL_VideoDisplay *display, SDL_FullscreenOp fullscreen)
++{
++    SDL_WindowData *data = window->internal;
++    BSurface *surface = data->surface;
++    if (fullscreen == SDL_FULLSCREEN_OP_ENTER) {
++        if (!data->fullscreen) {
++            data->restoreFrame = surface->Frame();
++            data->restoreLook = data->look;
++        }
++        data->fullscreen = true;
++        BRect screen = BScreen(B_MAIN_SCREEN_ID).Frame();
++        surface->SetLook(B_NO_BORDER_WINDOW_LOOK);
++        surface->MoveTo(screen.LeftTop());
++        surface->ResizeTo(screen.Width(), screen.Height());
++        ReportFrame(data);
++    } else if (fullscreen == SDL_FULLSCREEN_OP_LEAVE) {
++        if (data->fullscreen) {
++            data->fullscreen = false;
++            surface->SetLook(data->restoreLook);
++            surface->MoveTo(data->restoreFrame.LeftTop());
++            surface->ResizeTo(data->restoreFrame.Width(), data->restoreFrame.Height());
++            ReportFrame(data);
++        }
++    }
++    return SDL_FULLSCREEN_SUCCEEDED;
++}
++
++static bool VOS_SetWindowMouseGrab(SDL_VideoDevice *_this, SDL_Window *window, bool grabbed)
++{
++    UpdateEventMask(window->internal, grabbed);
++    return true;
++}
++
++static bool VOS_SetRelativeMouseMode(bool enabled)
++{
++    SDL_VideoDevice *_this = SDL_GetVideoDevice();
++    for (SDL_Window *w = _this ? _this->windows : NULL; w; w = w->next) {
++        if (w->internal) {
++            bool grab = (w->flags & SDL_WINDOW_MOUSE_GRABBED) != 0;
++            bool want = grab || enabled;
++            if (want != w->internal->pointerEvents) {
++                w->internal->pointerEvents = want;
++                if (want) {
++                    w->internal->surface->SetEventMask(B_POINTER_EVENTS, B_NO_POINTER_HISTORY);
++                } else {
++                    w->internal->surface->SetEventMask(0, 0);
++                }
++            }
++        }
++    }
++    return true;
++}
++
++//  MARK: - Events
++
++static void HandleKey(SDL_WindowData *data, BMessage &msg, bool down)
++{
++    int32 code;
++    if (msg.FindInt32("be:evdev_code", &code) != B_OK) {
++        return;
++    }
++    SDL_Scancode scancode = SDL_GetScancodeFromTable(SDL_SCANCODE_TABLE_LINUX, code);
++    SDL_SendKeyboardKey(0, SDL_DEFAULT_KEYBOARD_ID, code, scancode, down);
++
++    if (down && SDL_TextInputActive(data->window)) {
++        const char *bytes;
++        if (msg.FindString("bytes", &bytes) == B_OK && bytes[0] != '\0'
++                && (unsigned char)bytes[0] >= 0x20 && (unsigned char)bytes[0] != 0x7f) {
++            SDL_SendKeyboardText(bytes);
++        }
++    }
++}
++
++static void HandleButtons(SDL_WindowData *data, BMessage &msg);
++
++static void HandleMouseMoved(SDL_WindowData *data, BMessage &msg)
++{
++    SDL_Window *window = data->window;
++    SDL_Mouse *mouse = SDL_GetMouse();
++    if (mouse && mouse->relative_mode) {
++        float dx, dy;
++        if (msg.FindFloat("be:raw_delta_x", &dx) == B_OK && msg.FindFloat("be:raw_delta_y", &dy) == B_OK) {
++            SDL_SendMouseMotion(0, window, SDL_DEFAULT_MOUSE_ID, true, dx, dy);
++            return;
++        }
++    }
++
++    // The server sends screen coordinates only; the receiver converts.
++    BPoint where;
++    if (msg.FindPoint("be:view_where", &where) != B_OK) {
++        if (msg.FindPoint("screen_where", &where) != B_OK
++                && msg.FindPoint("where", &where) != B_OK) {
++            return;
++        }
++        where -= data->surface->Frame().LeftTop();
++    }
++    if (mouse && mouse->relative_mode) {
++        SDL_SendMouseMotion(0, window, SDL_DEFAULT_MOUSE_ID, true, where.x - data->lastX, where.y - data->lastY);
++    } else {
++        SDL_SendMouseMotion(0, window, SDL_DEFAULT_MOUSE_ID, false, where.x, where.y);
++    }
++    data->lastX = where.x;
++    data->lastY = where.y;
++
++    // A release outside the window is only reported through the state here.
++    int32 buttons;
++    if (msg.what == B_MOUSE_MOVED && msg.FindInt32("buttons", &buttons) == B_OK
++            && buttons != data->buttons) {
++        HandleButtons(data, msg);
++    }
++}
++
++static void HandleButtons(SDL_WindowData *data, BMessage &msg)
++{
++    if (msg.what != B_MOUSE_MOVED) {
++        HandleMouseMoved(data, msg);
++    }
++    int32 buttons;
++    if (msg.FindInt32("buttons", &buttons) != B_OK) {
++        buttons = 0;
++    }
++    static const struct { int32 mask; Uint8 button; } kMap[] = {
++        { kButtonLeft, SDL_BUTTON_LEFT },
++        { kButtonRight, SDL_BUTTON_RIGHT },
++        { kButtonMiddle, SDL_BUTTON_MIDDLE }
++    };
++    for (size_t i = 0; i < SDL_arraysize(kMap); i++) {
++        bool was = (data->buttons & kMap[i].mask) != 0;
++        bool now = (buttons & kMap[i].mask) != 0;
++        if (was != now) {
++            SDL_SendMouseButton(0, data->window, SDL_DEFAULT_MOUSE_ID, kMap[i].button, now);
++        }
++    }
++    data->buttons = buttons;
++}
++
++static void DispatchEvent(SDL_WindowData *data, BMessage &msg)
++{
++    SDL_Window *window = data->window;
++    switch (msg.what) {
++    case B_KEY_DOWN:
++    case B_UNMAPPED_KEY_DOWN:
++        HandleKey(data, msg, true);
++        break;
++    case B_KEY_UP:
++    case B_UNMAPPED_KEY_UP:
++        HandleKey(data, msg, false);
++        break;
++    case B_MOUSE_MOVED:
++        HandleMouseMoved(data, msg);
++        break;
++    case B_MOUSE_DOWN:
++    case B_MOUSE_UP:
++        HandleButtons(data, msg);
++        break;
++    case B_MOUSE_WHEEL_CHANGED:
++    {
++        float dx = 0, dy = 0;
++        msg.FindFloat("be:wheel_delta_x", &dx);
++        msg.FindFloat("be:wheel_delta_y", &dy);
++        SDL_SendMouseWheel(0, window, SDL_DEFAULT_MOUSE_ID, dx, -dy, SDL_MOUSEWHEEL_NORMAL);
++        break;
++    }
++    case B_WINDOW_ACTIVATED:
++        if (msg.GetBool("active", false)) {
++            SDL_SetKeyboardFocus(window);
++            SDL_SetMouseFocus(window);
++        } else {
++            if (SDL_GetKeyboardFocus() == window) {
++                SDL_SetKeyboardFocus(NULL);
++            }
++            if (SDL_GetMouseFocus() == window) {
++                SDL_SetMouseFocus(NULL);
++            }
++        }
++        break;
++    case B_WINDOW_MOVED:
++    {
++        BPoint where;
++        if (msg.FindPoint("where", &where) == B_OK) {
++            SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_MOVED, (int)where.x, (int)where.y);
++        }
++        break;
++    }
++    case B_WINDOW_RESIZED:
++    {
++        int32 w = msg.GetInt32("width", -1) + 1;
++        int32 h = msg.GetInt32("height", -1) + 1;
++        if (w > 0 && h > 0) {
++#ifdef SDL_VIDEO_OPENGL_EGL
++            VOS_GL_WindowResized(SDL_GetVideoDevice(), window);
++#endif
++            SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, w, h);
++        }
++        break;
++    }
++    case B_QUIT_REQUESTED:
++        SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_CLOSE_REQUESTED, 0, 0);
++        break;
++    case B_MINIMIZE:
++    {
++        bool minimize;
++        if (msg.FindBool("minimize", &minimize) == B_OK) {
++            data->surface->Minimize(minimize);
++            SDL_SendWindowEvent(window, minimize ? SDL_EVENT_WINDOW_MINIMIZED : SDL_EVENT_WINDOW_RESTORED, 0, 0);
++        }
++        break;
++    }
++    case B_ZOOM:
++        Zoom(data);
++        break;
++    case B_MOUSE_IDLE:
++    default:
++        break;
++    }
++}
++
++static void VOS_PumpEvents(SDL_VideoDevice *_this)
++{
++    // A window can be destroyed while its events are dispatched.
++    for (SDL_Window *w = _this->windows; w;) {
++        SDL_Window *next = w->next;
++        SDL_WindowData *data = w->internal;
++        if (data) {
++            BMessage msg;
++            while (w->internal && data->surface->NextEvent(&msg, 0) == B_OK) {
++                bool exposed = false;
++                if (msg.what == B_WINDOW_RESIZED) {
++                    exposed = true;
++                }
++                DispatchEvent(data, msg);
++                if (exposed) {
++                    SDL_SendWindowEvent(w, SDL_EVENT_WINDOW_EXPOSED, 0, 0);
++                }
++                msg.MakeEmpty();
++            }
++        }
++        w = next;
++    }
++}
++
++static int VOS_WaitEventTimeout(SDL_VideoDevice *_this, Sint64 timeoutNS)
++{
++    SDL_VideoData *vd = _this->internal;
++    struct pollfd fds[64];
++    int n = 0;
++    fds[n].fd = vd->wakeFds[0];
++    fds[n].events = POLLIN;
++    n++;
++    for (SDL_Window *w = _this->windows; w && n < 64; w = w->next) {
++        if (w->internal && w->internal->fd >= 0) {
++            fds[n].fd = w->internal->fd;
++            fds[n].events = POLLIN;
++            n++;
++        }
++    }
++
++    int timeoutMS = -1;
++    if (timeoutNS >= 0) {
++        timeoutMS = (int)((timeoutNS + SDL_NS_PER_MS - 1) / SDL_NS_PER_MS);
++    }
++    int ret = poll(fds, n, timeoutMS);
++    if (ret > 0 && (fds[0].revents & POLLIN)) {
++        char buf[32];
++        while (read(vd->wakeFds[0], buf, sizeof(buf)) > 0) {
++        }
++    }
++    return ret > 0 ? 1 : 0;
++}
++
++static void VOS_SendWakeupEvent(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    char c = 0;
++    ssize_t r = write(_this->internal->wakeFds[1], &c, 1);
++    (void)r;
++}
++
++//  MARK: - Framebuffer
++
++bool VOS_GetWindowBuffer(SDL_Window *window, void **bits, int *pitch, int *width, int *height)
++{
++    SDL_WindowData *data = window->internal;
++    BBitmap *buffer = data ? data->surface->Buffer() : NULL;
++    if (!buffer) {
++        return false;
++    }
++    *bits = buffer->Bits();
++    *pitch = buffer->BytesPerRow();
++    *width = (int)buffer->Bounds().IntegerWidth() + 1;
++    *height = (int)buffer->Bounds().IntegerHeight() + 1;
++    return true;
++}
++
++void VOS_PresentWindow(SDL_Window *window)
++{
++    SDL_WindowData *data = window->internal;
++    BBitmap *buffer = data->surface->Buffer();
++    if (buffer) {
++        data->surface->Present(buffer->Bounds());
++    }
++}
++
++static bool VOS_CreateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *window, SDL_PixelFormat *format, void **pixels, int *pitch)
++{
++    int w, h;
++    if (!VOS_GetWindowBuffer(window, pixels, pitch, &w, &h)) {
++        return SDL_SetError("No surface buffer");
++    }
++    *format = SDL_PIXELFORMAT_XRGB8888;
++    return true;
++}
++
++static bool VOS_UpdateWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *window, const SDL_Rect *rects, int numrects)
++{
++    void *bits;
++    int pitch, w, h;
++    if (!VOS_GetWindowBuffer(window, &bits, &pitch, &w, &h)) {
++        return false;
++    }
++    SDL_WindowData *data = window->internal;
++    for (int i = 0; i < numrects; i++) {
++        SDL_Rect r = rects[i];
++        if (r.x < 0) { r.w += r.x; r.x = 0; }
++        if (r.y < 0) { r.h += r.y; r.y = 0; }
++        if (r.x + r.w > w) { r.w = w - r.x; }
++        if (r.y + r.h > h) { r.h = h - r.y; }
++        if (r.w <= 0 || r.h <= 0) {
++            continue;
++        }
++        // The compositor treats alpha 0 as clear.
++        for (int y = r.y; y < r.y + r.h; y++) {
++            Uint32 *row = (Uint32 *)((Uint8 *)bits + y * pitch) + r.x;
++            for (int x = 0; x < r.w; x++) {
++                row[x] |= 0xff000000u;
++            }
++        }
++        data->surface->Present(BRect(r.x, r.y, r.x + r.w - 1, r.y + r.h - 1));
++    }
++    return true;
++}
++
++static void VOS_DestroyWindowFramebuffer(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    // The buffer belongs to the surface.
++}
++
++//  MARK: - Device
++
++static bool VOS_VideoInit(SDL_VideoDevice *_this)
++{
++    if (be_app == NULL) {
++        BApplication *app = new (std::nothrow) BApplication("application/x-vnd.vos-sdl");
++        if (app == NULL || app->InitCheck() != B_OK) {
++            delete app;
++            return SDL_SetError("Cannot connect to the V\\OS app server");
++        }
++    }
++
++    if (!VOS_InitModes(_this)) {
++        return false;
++    }
++
++    SDL_Mouse *mouse = SDL_GetMouse();
++    if (mouse) {
++        mouse->SetRelativeMouseMode = VOS_SetRelativeMouseMode;
++    }
++    SDL_AddKeyboard(SDL_DEFAULT_KEYBOARD_ID, NULL, false);
++    SDL_AddMouse(SDL_DEFAULT_MOUSE_ID, NULL, false);
++    return true;
++}
++
++static void VOS_VideoQuit(SDL_VideoDevice *_this)
++{
++}
++
++static void VOS_DeleteDevice(SDL_VideoDevice *device)
++{
++    SDL_VideoData *vd = device->internal;
++    if (vd) {
++        if (vd->wakeFds[0] >= 0) {
++            close(vd->wakeFds[0]);
++            close(vd->wakeFds[1]);
++        }
++        SDL_free(vd);
++    }
++    SDL_free(device);
++}
++
++static SDL_VideoDevice *VOS_CreateDevice(void)
++{
++    SDL_VideoDevice *device = (SDL_VideoDevice *)SDL_calloc(1, sizeof(SDL_VideoDevice));
++    SDL_VideoData *vd = (SDL_VideoData *)SDL_calloc(1, sizeof(SDL_VideoData));
++    if (!device || !vd) {
++        SDL_free(device);
++        SDL_free(vd);
++        return NULL;
++    }
++    vd->wakeFds[0] = vd->wakeFds[1] = -1;
++    if (pipe2(vd->wakeFds, O_CLOEXEC | O_NONBLOCK) != 0) {
++        SDL_free(device);
++        SDL_free(vd);
++        return NULL;
++    }
++    device->internal = vd;
++
++    device->VideoInit = VOS_VideoInit;
++    device->VideoQuit = VOS_VideoQuit;
++    device->GetDisplayBounds = VOS_GetDisplayBounds;
++    device->PumpEvents = VOS_PumpEvents;
++    device->WaitEventTimeout = VOS_WaitEventTimeout;
++    device->SendWakeupEvent = VOS_SendWakeupEvent;
++
++    device->CreateSDLWindow = VOS_CreateWindow;
++    device->SetWindowTitle = VOS_SetWindowTitle;
++    device->SetWindowPosition = VOS_SetWindowPosition;
++    device->SetWindowSize = VOS_SetWindowSize;
++    device->ShowWindow = VOS_ShowWindow;
++    device->HideWindow = VOS_HideWindow;
++    device->RaiseWindow = VOS_RaiseWindow;
++    device->MaximizeWindow = VOS_MaximizeWindow;
++    device->MinimizeWindow = VOS_MinimizeWindow;
++    device->RestoreWindow = VOS_RestoreWindow;
++    device->SetWindowBordered = VOS_SetWindowBordered;
++    device->SetWindowResizable = VOS_SetWindowResizable;
++    device->SetWindowFullscreen = VOS_SetWindowFullscreen;
++    device->SetWindowMouseGrab = VOS_SetWindowMouseGrab;
++    device->DestroyWindow = VOS_DestroyWindow;
++    device->CreateWindowFramebuffer = VOS_CreateWindowFramebuffer;
++    device->UpdateWindowFramebuffer = VOS_UpdateWindowFramebuffer;
++    device->DestroyWindowFramebuffer = VOS_DestroyWindowFramebuffer;
++
++#ifdef SDL_VIDEO_OPENGL_EGL
++    device->GL_LoadLibrary = VOS_GL_LoadLibrary;
++    device->GL_GetProcAddress = VOS_GL_GetProcAddress;
++    device->GL_UnloadLibrary = VOS_GL_UnloadLibrary;
++    device->GL_CreateContext = VOS_GL_CreateContext;
++    device->GL_MakeCurrent = VOS_GL_MakeCurrent;
++    device->GL_SetSwapInterval = VOS_GL_SetSwapInterval;
++    device->GL_GetSwapInterval = VOS_GL_GetSwapInterval;
++    device->GL_SwapWindow = VOS_GL_SwapWindow;
++    device->GL_DestroyContext = VOS_GL_DestroyContext;
++#endif
++
++    device->free = VOS_DeleteDevice;
++    return device;
++}
++
++extern "C" {
++VideoBootStrap VOS_bootstrap = {
++    "vos", "V\\OS graphics",
++    VOS_CreateDevice,
++    NULL,
++    false
++};
++}
++
++#endif // SDL_VIDEO_DRIVER_VOS
+diff --git a/src/video/vos/SDL_vosvideo.h b/src/video/vos/SDL_vosvideo.h
+--- /dev/null
++++ b/src/video/vos/SDL_vosvideo.h
+@@ -0,0 +1,71 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++#ifndef SDL_vosvideo_h_
++#define SDL_vosvideo_h_
++
++#include "../SDL_sysvideo.h"
++
++struct SDL_VideoData
++{
++    int wakeFds[2]; // self-pipe for SendWakeupEvent
++#ifdef SDL_VIDEO_OPENGL_EGL
++    void *eglDisplay;
++    void *eglConfig;
++    int swapInterval;
++#endif
++};
++
++#ifdef __cplusplus
++#include <Rect.h>
++#include <Window.h>
++
++namespace BPrivate { class BSurface; }
++using BPrivate::BSurface;
++
++struct SDL_WindowData
++{
++    BSurface *surface;
++    int fd; // pollable event port
++    int32 buttons;
++    BRect restoreFrame; // zoom and fullscreen
++    window_look restoreLook;
++    window_look look;
++    bool zoomed;
++    bool fullscreen;
++    bool pointerEvents;
++    float lastX, lastY;
++    SDL_Window *window;
++    void *pbuffer; // EGL surface, see SDL_vosopengl.cc
++    int pbufferW, pbufferH;
++};
++#else
++struct SDL_WindowData;
++#endif
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// Shared with the GL code: the surface pixels, as ready for a Present().
++extern bool VOS_GetWindowBuffer(SDL_Window *window, void **bits, int *pitch, int *width, int *height);
++extern void VOS_PresentWindow(SDL_Window *window);
++
++extern bool VOS_GL_LoadLibrary(SDL_VideoDevice *_this, const char *path);
++extern SDL_FunctionPointer VOS_GL_GetProcAddress(SDL_VideoDevice *_this, const char *proc);
++extern void VOS_GL_UnloadLibrary(SDL_VideoDevice *_this);
++extern SDL_GLContext VOS_GL_CreateContext(SDL_VideoDevice *_this, SDL_Window *window);
++extern bool VOS_GL_MakeCurrent(SDL_VideoDevice *_this, SDL_Window *window, SDL_GLContext context);
++extern bool VOS_GL_SetSwapInterval(SDL_VideoDevice *_this, int interval);
++extern bool VOS_GL_GetSwapInterval(SDL_VideoDevice *_this, int *interval);
++extern bool VOS_GL_SwapWindow(SDL_VideoDevice *_this, SDL_Window *window);
++extern bool VOS_GL_DestroyContext(SDL_VideoDevice *_this, SDL_GLContext context);
++extern void VOS_GL_WindowDestroyed(SDL_VideoDevice *_this, SDL_Window *window);
++extern void VOS_GL_WindowResized(SDL_VideoDevice *_this, SDL_Window *window);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif

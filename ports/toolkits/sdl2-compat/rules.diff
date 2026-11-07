@@ -1,0 +1,26 @@
+--- a/debian/control	2026-11-07 10:09:53.326402240 +0100
++++ b/debian/control	2026-11-07 10:09:53.346402250 +0100
+@@ -76,8 +76,10 @@
+  libsdl2-compat (= ${binary:Version}),
+  ${misc:Depends},
+ Conflicts:
++ libsdl2,
+  libsdl2-2.0-0,
+ Replaces:
++ libsdl2,
+  libsdl2-2.0-0,
+ Provides:
+  libsdl2-2.0-0 (= ${binary:Version}),
+--- a/debian/rules	2026-11-07 10:09:53.326402240 +0100
++++ b/debian/rules	2026-11-07 10:09:53.346402250 +0100
+@@ -50,6 +50,10 @@
+ 	rm -fv debian/tmp/usr/share/installed-tests/SDL2_compat/testtimer.test
+ endif
+ 
++# The tests need the V\OS kernel interface.
++override_dh_auto_test:
++	:
++
+ override_dh_strip:
+ 	dh_strip -plibsdl2-compat-shim --no-automatic-dbgsym
+ 	dh_strip --remaining-packages

@@ -1,0 +1,17 @@
+Description: Report the V\OS video driver in SDL_GetWindowWMInfo
+ Callers such as 0 A.D. treat a failed query as fatal for GL setup.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+
+--- a/src/sdl2_compat.c
++++ b/src/sdl2_compat.c
+@@ -4675,6 +4675,9 @@
+         info->subsystem = SDL2_SYSWM_X11;
+         info->info.x11.display = SDL3_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, NULL);
+         info->info.x11.window = (unsigned long)SDL3_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
++    } else if (SDL3_strcmp(driver, "vos") == 0) {
++        /* No native handles to expose; succeed so callers can go on. */
++        info->subsystem = SDL2_SYSWM_UNKNOWN;
+     } else {
+         SDL3_SetError("Video driver '%s' has no mapping to SDL_SysWMinfo", driver);
+         info->subsystem = SDL2_SYSWM_UNKNOWN;

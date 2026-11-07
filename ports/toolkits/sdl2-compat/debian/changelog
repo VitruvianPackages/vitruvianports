@@ -1,0 +1,6 @@
+sdl2-compat (2.32.54+ds-1vos1) unstable; urgency=medium
+
+  * Supersede the previous V\OS libsdl2 package.
+  * Skip the build-time tests, which need the V\OS kernel interface.
+
+ -- The Vitruvian Project <packages@v-os.dev>  Sat, 07 Nov 2026 12:00:00 +0000
