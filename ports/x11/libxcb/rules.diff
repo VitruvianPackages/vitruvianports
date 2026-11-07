@@ -1,0 +1,10 @@
+--- a/debian/rules
++++ b/debian/rules
+@@ -4,6 +4,7 @@
+ 	dh $@ --builddirectory=build
+ 
+ override_dh_auto_configure:
++	patch -p1 < debian/patches/vos-x-client.patch
+ 	dh_auto_configure -- \
+ 		PYTHON=python3 \
+ 		--enable-dbe=no \

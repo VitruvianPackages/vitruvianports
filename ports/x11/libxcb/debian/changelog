@@ -1,0 +1,5 @@
+libxcb (1.17.0-2vos1) unstable; urgency=medium
+
+  * Register X clients with the V\OS roster.
+
+ -- The Vitruvian Project <packages@v-os.dev>  Sat, 07 Nov 2026 12:00:00 +0000

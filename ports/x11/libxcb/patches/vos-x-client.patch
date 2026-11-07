@@ -1,0 +1,48 @@
+Description: V\OS: register X clients with the roster.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+---
+--- a/src/xcb_util.c
++++ b/src/xcb_util.c
+@@ -34,6 +34,7 @@
+ #include <limits.h>
+ #include <errno.h>
+ #include <stdio.h>
++#include <dlfcn.h>
+ #include <stdlib.h>
+ #include <stddef.h>
+ #include <string.h>
+@@ -517,6 +518,25 @@
+ }
+ #endif
+ 
++/* V\OS: register the client with the roster. */
++static void *vos_x_sym(const char *name)
++{
++    static void *h;
++    static int tried;
++    if (!tried) {
++        tried = 1;
++        h = dlopen("libvos_x_client.so", RTLD_NOW | RTLD_LOCAL);
++    }
++    return h ? dlsym(h, name) : NULL;
++}
++
++static void vos_x_attach(void)
++{
++    void (*f)(void) = (void (*)(void)) vos_x_sym("vos_x_client_attach");
++    if (f)
++        f();
++}
++
+ xcb_connection_t *xcb_connect(const char *displayname, int *screenp)
+ {
+     return xcb_connect_to_display_with_auth_info(displayname, NULL, screenp);
+@@ -580,5 +586,7 @@
+ out:
+     free(host);
+     free(protocol);
++    if (c && !c->has_error)
++        vos_x_attach();
+     return c;
+ }
