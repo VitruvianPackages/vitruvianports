@@ -1,0 +1,20 @@
+Description: Do not cycle when the app has no listable window.
+Author: Dario Casalinuovo
+Origin: vendor
+Forwarded: no
+---
+diff --git a/source/InnerPanelIcons.cpp b/source/InnerPanelIcons.cpp
+index f6acab4..e73950a 100644
+--- a/source/InnerPanelIcons.cpp
++++ b/source/InnerPanelIcons.cpp
+@@ -917,6 +917,10 @@ void TAppPanelIcon::Launch()
+ 				fWindowCyclerIndex = 0;
+ 		}
+ 
++		// Nothing to cycle without a listable window.
++		if ( fWindowIDList.CountItems() == 0 )
++			return;
++
+ 		int starting_cycle = fWindowCyclerIndex;
+ 		int nlaps = 0;
+ 		int32 first_mini = -1;
