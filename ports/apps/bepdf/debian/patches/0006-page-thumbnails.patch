@@ -1,0 +1,558 @@
+Description: page thumbnails in the page list, localisation fixes
+ The left-hand page list showed only the page number. Render a small
+ thumbnail of every page in a background thread (PageThumbnailRenderer)
+ and draw it above the page label (PageThumbnailItem).
+ .
+ Open with the page list instead of the bookmarks by default.
+ .
+ Reload the catalog by signature at start-up and when the language is
+ changed in the Locale preferences (B_LOCALE_CHANGED), rebuilding the
+ menu bar and tool bar of the open windows; the automatic catalog lookup
+ of B_TRANSLATE leaves every string in English on V\OS.
+Author: Angelo Scarna <calang83@gmail.com>
+Forwarded: no
+Origin: https://github.com/kratos83/VOS-bepdf
+
+diff --git a/bepdf/beos/BepdfApplication.cpp b/bepdf/beos/BepdfApplication.cpp
+--- a/bepdf/beos/BepdfApplication.cpp
++++ b/bepdf/beos/BepdfApplication.cpp
+@@ -24,6 +24,7 @@
+ #include <ctype.h>
+ 
+ #include <locale/Catalog.h>
++#include <locale/LocaleRoster.h>
+ #include <be/app/Application.h>
+ #include <be/storage/Entry.h>
+ #include <be/storage/FilePanel.h>
+@@ -150,9 +151,21 @@
+ }
+ 
+ ///////////////////////////////////////////////////////////
++// Load the catalog by signature from the standard locale directories.
++// The automatic lookup of B_TRANSLATE goes through the executable's
++// attributes and image info; when that fails every string stays English.
++static void LoadAppCatalog()
++{
++	BCatalog* catalog = B_CATALOG;
++		// first use runs the automatic lookup once; override its result
++	catalog->SetTo("x-vnd.mp-xpdf");
++}
++
++
+ BepdfApplication::BepdfApplication()
+ 		: BApplication ( BEPDF_APP_SIG )
+ {
++	LoadAppCatalog();
+ 	mSettings = new GlobalSettings();
+ 	mOpenFilePanel            = NULL;
+ 	mSaveFilePanel            = NULL;
+@@ -645,6 +658,17 @@
+ 			mWindow->Unlock();
+ 		}
+ 		break;
++	case B_LOCALE_CHANGED:
++		// the language was changed in the Locale preferences: reload the
++		// catalog and let the windows rebuild their menus and toolbars
++		BLocaleRoster::Default()->Refresh();
++		LoadAppCatalog();
++		for (int32 i = 0; i < CountWindows(); i++) {
++			PDFWindow* window = dynamic_cast<PDFWindow*>(WindowAt(i));
++			if (window != NULL)
++				window->PostMessage(PDFWindow::LOCALE_CHANGED_MSG);
++		}
++		break;
+ 	case B_CANCEL:
+ 		if (!mWindow && mReadyToQuit) {
+ 			PostMessage(B_QUIT_REQUESTED);
+diff --git a/bepdf/beos/PageLabels.cpp b/bepdf/beos/PageLabels.cpp
+--- a/bepdf/beos/PageLabels.cpp
++++ b/bepdf/beos/PageLabels.cpp
+@@ -23,6 +23,7 @@
+ #include "PageLabels.h"
+ #include "LayoutUtils.h"
+ #include "TextConversion.h"
++#include "PageThumbnails.h"
+ 
+ const char *PageLabel::d[3][10] = {
+ 	{ "", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX" },
+@@ -164,7 +165,7 @@
+ 	if (old) {
+ 		BString s;
+ 		for (int i = old->GetPage(); i <= max; i++) {
+-			list.AddItem(new BStringItem(old->GetLabel(i, max, s)));
++			list.AddItem(new PageThumbnailItem(old->GetLabel(i, max, s)));
+ 		}
+ 		delete old;
+ 	}
+diff --git a/bepdf/beos/PageThumbnails.cpp b/bepdf/beos/PageThumbnails.cpp
+--- /dev/null
++++ b/bepdf/beos/PageThumbnails.cpp
+@@ -0,0 +1,237 @@
++/*
++ * BePDF: The PDF reader for Haiku.
++ * 	 Copyright (C) 2026	Angelo Scarnà
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#include "PageThumbnails.h"
++
++#include <math.h>
++#include <string.h>
++
++#include <be/interface/Font.h>
++#include <Message.h>
++#include <be/interface/View.h>
++
++#include <PDFDoc.h>
++#include <SplashOutputDev.h>
++#include <SplashBitmap.h>
++
++#include "BePDF.h"
++
++static const float kPadding = 4;
++
++
++PageThumbnailItem::PageThumbnailItem(const char* label)
++	:
++	BListItem(),
++	fLabel(label),
++	fThumbnail(NULL),
++	fFontHeight(0)
++{
++}
++
++
++PageThumbnailItem::~PageThumbnailItem()
++{
++	delete fThumbnail;
++}
++
++
++void
++PageThumbnailItem::SetThumbnail(BBitmap* bitmap)
++{
++	delete fThumbnail;
++	fThumbnail = bitmap;
++}
++
++
++void
++PageThumbnailItem::Update(BView* owner, const BFont* font)
++{
++	font_height fh;
++	font->GetHeight(&fh);
++	fFontHeight = ceilf(fh.ascent + fh.descent + fh.leading);
++	SetWidth(owner->Bounds().Width());
++	SetHeight(kThumbnailHeight + fFontHeight + 3 * kPadding);
++}
++
++
++void
++PageThumbnailItem::DrawItem(BView* owner, BRect frame, bool complete)
++{
++	if (IsSelected()) {
++		owner->SetHighColor(ui_color(B_LIST_SELECTED_BACKGROUND_COLOR));
++		owner->SetLowColor(ui_color(B_LIST_SELECTED_BACKGROUND_COLOR));
++	} else {
++		owner->SetHighColor(ui_color(B_LIST_BACKGROUND_COLOR));
++		owner->SetLowColor(ui_color(B_LIST_BACKGROUND_COLOR));
++	}
++	owner->FillRect(frame);
++
++	// thumbnail, centered in a fixed-size area
++	BRect area(0, 0, kThumbnailWidth - 1, kThumbnailHeight - 1);
++	area.OffsetTo(frame.left + (frame.Width() - kThumbnailWidth) / 2,
++		frame.top + kPadding);
++	if (fThumbnail != NULL) {
++		BRect bounds = fThumbnail->Bounds();
++		BRect r = bounds;
++		r.OffsetTo(area.left + (kThumbnailWidth - bounds.Width() - 1) / 2,
++			area.top + (kThumbnailHeight - bounds.Height() - 1) / 2);
++		r.left = floorf(r.left);
++		r.top = floorf(r.top);
++		r.right = r.left + bounds.Width();
++		r.bottom = r.top + bounds.Height();
++		owner->DrawBitmap(fThumbnail, r);
++		owner->SetHighColor(tint_color(ui_color(B_LIST_BACKGROUND_COLOR),
++			B_DARKEN_3_TINT));
++		owner->StrokeRect(r);
++	} else {
++		owner->SetHighColor(tint_color(ui_color(B_LIST_BACKGROUND_COLOR),
++			B_DARKEN_1_TINT));
++		owner->StrokeRect(area);
++	}
++
++	// page label
++	rgb_color text = IsSelected() ? ui_color(B_LIST_SELECTED_ITEM_TEXT_COLOR)
++		: ui_color(B_LIST_ITEM_TEXT_COLOR);
++	owner->SetHighColor(text);
++	font_height fh;
++	owner->GetFontHeight(&fh);
++	float width = owner->StringWidth(fLabel.String());
++	owner->DrawString(fLabel.String(),
++		BPoint(frame.left + (frame.Width() - width) / 2,
++			frame.top + kThumbnailHeight + 2 * kPadding + fh.ascent));
++}
++
++
++//////////////////////////////////////////////////////////////////////////
++
++
++PageThumbnailRenderer::PageThumbnailRenderer()
++	:
++	fDoc(NULL),
++	fThread(-1),
++	fStop(false)
++{
++}
++
++
++PageThumbnailRenderer::~PageThumbnailRenderer()
++{
++	Stop();
++}
++
++
++void
++PageThumbnailRenderer::Start(PDFDoc* doc, const BMessenger& target)
++{
++	Stop();
++	fDoc = doc;
++	fTarget = target;
++	fStop = false;
++	fThread = spawn_thread(ThreadEntry, "page thumbnails",
++		B_LOW_PRIORITY, this);
++	if (fThread >= 0)
++		resume_thread(fThread);
++}
++
++
++void
++PageThumbnailRenderer::Stop()
++{
++	if (fThread >= 0) {
++		fStop = true;
++		status_t result;
++		wait_for_thread(fThread, &result);
++		fThread = -1;
++	}
++}
++
++
++int32
++PageThumbnailRenderer::ThreadEntry(void* data)
++{
++	static_cast<PageThumbnailRenderer*>(data)->Run();
++	return 0;
++}
++
++
++int
++PageThumbnailRenderer::AbortCheck(void* data)
++{
++	return static_cast<PageThumbnailRenderer*>(data)->fStop;
++}
++
++
++void
++PageThumbnailRenderer::Run()
++{
++	SplashColor paper;
++	paper[0] = paper[1] = paper[2] = 255;
++	SplashOutputDev dev(splashModeRGB8, 4, gFalse, paper);
++
++	int pages = fDoc->getNumPages();
++	for (int page = 1; page <= pages && !fStop; page++) {
++		gPdfLock->Lock();
++		if (fStop) {
++			gPdfLock->Unlock();
++			break;
++		}
++
++		double w = fDoc->getPageCropWidth(page);
++		double h = fDoc->getPageCropHeight(page);
++		int rotate = fDoc->getPageRotate(page);
++		if (rotate == 90 || rotate == 270) {
++			double t = w; w = h; h = t;
++		}
++		if (w < 1 || h < 1) {
++			gPdfLock->Unlock();
++			continue;
++		}
++		double dpi = 72.0 * fmin(PageThumbnailItem::kThumbnailWidth / w,
++			PageThumbnailItem::kThumbnailHeight / h);
++
++		dev.startDoc(fDoc->getXRef());
++		fDoc->displayPage(&dev, page, dpi, dpi, 0, gFalse, gTrue, gFalse,
++			AbortCheck, this);
++
++		BBitmap* bitmap = NULL;
++		SplashBitmap* src = dev.getBitmap();
++		if (!fStop && src != NULL) {
++			int width = src->getWidth();
++			int height = src->getHeight();
++			bitmap = new BBitmap(BRect(0, 0, width - 1, height - 1),
++				B_RGB32);
++			if (bitmap->InitCheck() == B_OK) {
++				uint8* dst = (uint8*)bitmap->Bits();
++				for (int y = 0; y < height; y++) {
++					const uint8* s = src->getDataPtr() + y * src->getRowSize();
++					uint8* d = dst + y * bitmap->BytesPerRow();
++					for (int x = 0; x < width; x++, s += 3, d += 4) {
++						d[0] = s[2];
++						d[1] = s[1];
++						d[2] = s[0];
++						d[3] = 255;
++					}
++				}
++			} else {
++				delete bitmap;
++				bitmap = NULL;
++			}
++		}
++		gPdfLock->Unlock();
++
++		if (bitmap != NULL) {
++			BMessage msg(THUMBNAIL_MSG);
++			msg.AddInt32("index", page - 1);
++			msg.AddPointer("bitmap", bitmap);
++			if (fTarget.SendMessage(&msg) != B_OK)
++				delete bitmap;
++		}
++	}
++}
+diff --git a/bepdf/beos/PageThumbnails.h b/bepdf/beos/PageThumbnails.h
+--- /dev/null
++++ b/bepdf/beos/PageThumbnails.h
+@@ -0,0 +1,70 @@
++/*
++ * BePDF: The PDF reader for Haiku.
++ * 	 Copyright (C) 2026 Angelo Scarnà
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ */
++
++#ifndef PAGE_THUMBNAILS_H
++#define PAGE_THUMBNAILS_H
++
++#include <be/interface/Bitmap.h>
++#include <be/interface/ListItem.h>
++#include <Messenger.h>
++#include <OS.h>
++#include <be/support/String.h>
++
++class PDFDoc;
++
++// List entry of the page list: the thumbnail of the page (once rendered)
++// with the page label below it.
++class PageThumbnailItem : public BListItem {
++public:
++	PageThumbnailItem(const char* label);
++	~PageThumbnailItem();
++
++	void DrawItem(BView* owner, BRect frame, bool complete = false);
++	void Update(BView* owner, const BFont* font);
++
++	// takes ownership of bitmap
++	void SetThumbnail(BBitmap* bitmap);
++
++	static const int32 kThumbnailWidth = 96;
++	static const int32 kThumbnailHeight = 128;
++
++private:
++	BString  fLabel;
++	BBitmap* fThumbnail;
++	float    fFontHeight;
++};
++
++
++// Renders the thumbnails of all pages in a background thread and sends each
++// one to the target as THUMBNAIL_MSG (int32 "index", pointer "bitmap");
++// the receiver owns the bitmap.
++class PageThumbnailRenderer {
++public:
++	enum { THUMBNAIL_MSG = 'PTrd' };
++
++	PageThumbnailRenderer();
++	~PageThumbnailRenderer();
++
++	void Start(PDFDoc* doc, const BMessenger& target);
++	// blocks until the thread has finished
++	void Stop();
++
++private:
++	static int32 ThreadEntry(void* data);
++	static int AbortCheck(void* data);
++	void Run();
++
++	PDFDoc*         fDoc;
++	BMessenger      fTarget;
++	thread_id       fThread;
++	volatile bool   fStop;
++};
++
++#endif
+diff --git a/bepdf/beos/PDFWindow.cpp b/bepdf/beos/PDFWindow.cpp
+--- a/bepdf/beos/PDFWindow.cpp
++++ b/bepdf/beos/PDFWindow.cpp
+@@ -187,6 +187,7 @@
+ ///////////////////////////////////////////////////////////
+ PDFWindow::~PDFWindow()
+ {
++	mThumbnails.Stop();
+ 	RemoveHandler(&mEntryChangedMonitor);
+ 
+ 	DeleteAnnotTemplates();
+@@ -241,8 +242,8 @@
+ 	BList list;
+ 	for (int32 i = 0; i < mMainView->GetNumPages(); i++) {
+ 		char pageNo[20];
+-		sprintf(pageNo, "%5.0d", (int)(i+1));
+-		list.AddItem(new BStringItem(pageNo));
++		sprintf(pageNo, "%d", (int)(i+1));
++		list.AddItem(new PageThumbnailItem(pageNo));
+ 	}
+ 
+ 	MakeEmpty(mPagesView);
+@@ -268,6 +269,40 @@
+ 		mMainView->GetPDFDoc());
+ 
+ 	gPdfLock->Unlock();
++
++	StartThumbnails();
++}
++
++// rebuild menu bar and toolbar with the strings of the current language
++void PDFWindow::RebuildLocalizedUI() {
++	BGroupLayout* root = dynamic_cast<BGroupLayout*>(GetLayout());
++	if (root == NULL || fMenuBar == NULL || mToolBar == NULL)
++		return;
++
++	int16 zoom = gApp->GetSettings()->GetZoom();
++	float rotation = gApp->GetSettings()->GetRotation();
++
++	fMenuBar->RemoveSelf();
++	delete fMenuBar;
++	mToolBar->RemoveSelf();
++	delete mToolBar;
++
++	fMenuBar = BuildMenu();
++	BuildToolBar();
++	root->AddView(0, fMenuBar);
++	root->AddView(1, mToolBar);
++
++	SetTotalPageNumber(mMainView->GetNumPages());
++	char pageStr[64];
++	snprintf(pageStr, sizeof(pageStr), "%d", mMainView->Page());
++	mPageNumberItem->SetText(pageStr);
++	SetZoom(zoom);
++	SetRotation(rotation);
++	UpdateInputEnabler();
++}
++
++void PDFWindow::StartThumbnails() {
++	mThumbnails.Start(mMainView->GetPDFDoc(), BMessenger(this));
+ }
+ 
+ bool PDFWindow::SetPendingIfLocked(uint32 mask) {
+@@ -866,7 +901,8 @@
+     GlobalSettings *s = gApp->GetSettings();
+ 
+ 	// show or hide panel that is stored in settings
+-	ShowLeftPanel(s->GetLeftPanel());
++	// always open with the page thumbnails, not the bookmarks
++	ShowLeftPanel(PAGE_LIST_PANEL);
+ 	if (!s->GetShowLeftPanel()) {
+ 		// hide panel
+ 		ToggleLeftPanel();
+@@ -1091,6 +1127,24 @@
+         }
+ 		break;
+     }
++	case PageThumbnailRenderer::THUMBNAIL_MSG: {
++			int32 index;
++			BBitmap* bitmap;
++			if (message->FindInt32("index", &index) == B_OK
++				&& message->FindPointer("bitmap", (void**)&bitmap) == B_OK) {
++				PageThumbnailItem* item = dynamic_cast<PageThumbnailItem*>(
++					mPagesView->ItemAt(index));
++				if (item != NULL) {
++					item->SetThumbnail(bitmap);
++					mPagesView->InvalidateItem(index);
++				} else
++					delete bitmap;
++			}
++		}
++		break;
++	case LOCALE_CHANGED_MSG:
++		RebuildLocalizedUI();
++		break;
+ 	case PAGE_SELECTED_CMD:
+ 		page = mPagesView->CurrentSelection(0) + 1;
+ 		mMainView->MoveToPage(page);
+diff --git a/bepdf/beos/PDFWindow.h b/bepdf/beos/PDFWindow.h
+--- a/bepdf/beos/PDFWindow.h
++++ b/bepdf/beos/PDFWindow.h
+@@ -37,6 +37,7 @@
+ #include "EntryChangedMonitor.h"
+ #include "FindTextWindow.h"
+ #include "PDFView.h"
++#include "PageThumbnails.h"
+ #include "ToolTip.h"
+ 
+ // xpdf
+@@ -144,6 +145,7 @@
+ 		HISTORY_BACK_CMD,
+ 		HISTORY_FORWARD_CMD,
+ 		PAGE_SELECTED_CMD,
++		LOCALE_CHANGED_MSG,
+ 
+ 		// Rotation
+ 		SET_ROTATE_VALUE_CMD,
+@@ -223,6 +225,7 @@
+ 	BView*			fMainContainer;
+ 	BCardView*		mLayerView;
+ 	BListView      *mPagesView;
++	PageThumbnailRenderer mThumbnails;
+ 	OutlinesView   *mOutlinesView;
+ 	BToolBar*		mAnnotationBar;
+ 	AttachmentView *mAttachmentView;
+@@ -320,6 +323,8 @@
+ 
+ 	void FillPageList();
+ 	void UpdatePageList();
++	void StartThumbnails();
++	void RebuildLocalizedUI();
+ 	void HandlePendingActions(bool ok);
+ 
+ 	void EditAnnotation(bool edit);
+diff --git a/bepdf/beos/Settings.h b/bepdf/beos/Settings.h
+--- a/bepdf/beos/Settings.h
++++ b/bepdf/beos/Settings.h
+@@ -89,7 +89,7 @@
+   do(bool,    Bool,   ShowLeftPanel,          showLeftPanel,                                  true) \
+   do(bool,    Bool,   QuasiFullscreenMode,    quasiFullscreenMode,                            true) \
+   do(bool,    Bool,   FilledSelection,        filledSelection,                                true) \
+-  do(int8,    Int8,   LeftPanel,              leftPanel,                                         0) \
++  do(int8,    Int8,   LeftPanel,              leftPanel,                                         1) \
+                                                                                                     \
+   do(int8,    Int8,   PrintColorMode,	      printColorMode,                                    0) \
+   do(int32,  Int32,   Workspace,              workspace,                                         1) \
+diff --git a/Makefile b/Makefile
+--- a/Makefile
++++ b/Makefile
+@@ -42,6 +42,7 @@
+ 	bepdf/beos/PageCache.cpp \
+ 	bepdf/beos/PageLabels.cpp \
+ 	bepdf/beos/PageRenderer.cpp \
++	bepdf/beos/PageThumbnails.cpp \
+ 	bepdf/beos/PasswordWindow.cpp \
+ 	bepdf/beos/PreferencesWindow.cpp \
+ 	bepdf/beos/PrintSettingsWindow.cpp \
