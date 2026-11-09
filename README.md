@@ -1,7 +1,7 @@
 # vitruvianports
 
 Software packaged for V\OS. Each port is a Debian source package built with
-[vitruvianporter](https://github.com/VitruvianOS/vitruvianporter) in a clean
+[vitruvianporter](https://github.com/VitruvianPackages/vitruvianporter) in a clean
 V\OS build root; the resulting packages are published in the V\OS apt
 repository.
 
@@ -19,7 +19,7 @@ source comes from and carries only the packaging and patches.
 
 ## Building
 
-Requires [vitruvianporter](https://github.com/VitruvianOS/vitruvianporter),
+Requires [vitruvianporter](https://github.com/VitruvianPackages/vitruvianporter),
 Python 3 and Docker.
 
 ```
