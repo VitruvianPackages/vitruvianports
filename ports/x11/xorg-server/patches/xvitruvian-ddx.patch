@@ -6,7 +6,7 @@ diff --git a/hw/vitruvian/vInit.cpp b/hw/vitruvian/vInit.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInit.cpp
-@@ -0,0 +1,894 @@
+@@ -0,0 +1,897 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -574,7 +574,7 @@ new file mode 100644
 +};
 +
 +
-+// app_server draws the pointer; the X side keeps no sprite of its own.
++// app_server draws the pointer; vCursor.cpp hands it the shapes.
 +static Bool
 +vRealizeCursor(DeviceIntPtr, ScreenPtr, CursorPtr)
 +{
@@ -583,14 +583,17 @@ new file mode 100644
 +
 +
 +static void
-+vSetCursor(DeviceIntPtr, ScreenPtr, CursorPtr, int, int)
++vSetCursor(DeviceIntPtr pDev, ScreenPtr, CursorPtr pCursor, int, int)
 +{
++	VCursorSet(pDev, pCursor);
 +}
 +
 +
 +static void
-+vMoveCursor(DeviceIntPtr, ScreenPtr, int, int)
++vMoveCursor(DeviceIntPtr pDev, ScreenPtr, int, int)
 +{
++	// Covers a pointer entering a surface whose cursor is already current.
++	VCursorApply(pDev);
 +}
 +
 +
@@ -905,7 +908,7 @@ diff --git a/hw/vitruvian/vInput.cpp b/hw/vitruvian/vInput.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInput.cpp
-@@ -0,0 +1,912 @@
+@@ -0,0 +1,893 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1686,25 +1689,6 @@ new file mode 100644
 +			RevertToPointerRoot, currentTime.milliseconds, FALSE);
 +		atomic_set(&gVFocusWindowId, 0);
 +	}
-+
-+	VSetFocusViewCursor();
-+}
-+
-+
-+void
-+VSetFocusViewCursor()
-+{
-+	// Cursor image translation is app_server's; X-side cursor shapes
-+	// only restore or hide the seat cursor on the focused window until
-+	// the image bridge lands with the input lane follow-up.
-+	uint32 focusId = (uint32)atomic_get(&gVFocusWindowId);
-+	if (focusId == 0)
-+		return;
-+
-+	WindowPtr pWin = VWindowForId(focusId);
-+	VWindowPriv* priv = VWindowPrivFor(pWin);
-+	if (priv == NULL || priv->surface == NULL)
-+		return;
 +}
 +
 +
@@ -1822,7 +1806,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,206 @@
+@@ -0,0 +1,213 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1876,6 +1860,8 @@ new file mode 100644
 +#define public public_
 +extern "C" {
 +#include "privates.h"
++#include "cursorstr.h"
++#include "servermd.h"
 +#include "scrnintstr.h"
 +#include "inputstr.h"
 +#include "input.h"
@@ -1954,6 +1940,8 @@ new file mode 100644
 +	int32		width;
 +	int32		height;
 +	uint32		serial;
++	uint32		cursorKey;
++	bool		cursorSet;
 +};
 +
 +
@@ -1997,6 +1985,10 @@ new file mode 100644
 +void			VWindowSetTeam(uint32 windowId, team_id team);
 +void			VWindowAttribute(WindowPtr pWin);
 +
++// vCursor.cpp
++void			VCursorSet(DeviceIntPtr pDev, CursorPtr pCursor);
++void			VCursorApply(DeviceIntPtr pDev);
++
 +// vInput.cpp
 +void			VInitInputDevices(int argc, char* argv[]);
 +void			VStartInputThread();
@@ -2025,7 +2017,6 @@ new file mode 100644
 +void			VStopInputThread();
 +void			VDrainInputPort();
 +void			VSetWindowFocus(uint32 windowId, bool activated);
-+void			VSetFocusViewCursor();
 +void			VHandleWindowInput(const BMessage& msg);
 +
 +#endif	// _V_PRIV_H
@@ -3678,6 +3669,498 @@ new file mode 100644
 +		sOwnCount = 0;
 +		vTakeOwnership();
 +	}
++}
+diff --git a/hw/vitruvian/vCursor.cpp b/hw/vitruvian/vCursor.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vCursor.cpp
+@@ -0,0 +1,487 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// Pointer shapes. The sprite hooks see every cursor change of the master
++// pointer; the shape is translated to a BCursor and set on the surface
++// under the pointer, so app_server shows it only over that window and
++// falls back to its own cursor everywhere else.
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include "vPriv.h"
++
++#include <X11/cursorfont.h>
++#include <X11/fonts/font.h>
++
++#include <Bitmap.h>
++#include <Cursor.h>
++#include <Point.h>
++#include <Rect.h>
++#include <Surface.h>
++
++#include <string.h>
++
++#include <map>
++
++
++// dixfont.h pulls font headers that use C++ keywords.
++extern "C" int OpenFont(ClientPtr client, XID fid, Mask flags,
++	unsigned length, const char* name);
++
++static const size_t kMaxCachedCursors = 64;
++static const uint32 kHiddenKey = 0;
++
++static std::map<uint32, BCursor*> sCursors;
++
++// The cursor the master pointer shows now; NULL while hidden.
++static CursorPtr sCurrent = NULL;
++static bool sCurrentKnown = false;
++
++struct VGlyphEntry {
++	uint32	hash;
++	int		glyph;
++};
++
++static std::vector<VGlyphEntry> sGlyphs;
++static bool sGlyphsBuilt = false;
++
++
++struct VNamedCursor {
++	const char*	name;
++	BCursorID	id;
++};
++
++static const VNamedCursor kNamedCursors[] = {
++	{ "default", B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ "left_ptr", B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ "arrow", B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ "top_left_arrow", B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ "right_ptr", B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ "text", B_CURSOR_ID_I_BEAM },
++	{ "xterm", B_CURSOR_ID_I_BEAM },
++	{ "ibeam", B_CURSOR_ID_I_BEAM },
++	{ "vertical-text", B_CURSOR_ID_I_BEAM_HORIZONTAL },
++	{ "pointer", B_CURSOR_ID_FOLLOW_LINK },
++	{ "pointing_hand", B_CURSOR_ID_FOLLOW_LINK },
++	{ "hand", B_CURSOR_ID_FOLLOW_LINK },
++	{ "hand1", B_CURSOR_ID_FOLLOW_LINK },
++	{ "hand2", B_CURSOR_ID_FOLLOW_LINK },
++	{ "fleur", B_CURSOR_ID_MOVE },
++	{ "move", B_CURSOR_ID_MOVE },
++	{ "all-scroll", B_CURSOR_ID_MOVE },
++	{ "size_all", B_CURSOR_ID_MOVE },
++	{ "crosshair", B_CURSOR_ID_CROSS_HAIR },
++	{ "cross", B_CURSOR_ID_CROSS_HAIR },
++	{ "tcross", B_CURSOR_ID_CROSS_HAIR },
++	{ "watch", B_CURSOR_ID_PROGRESS },
++	{ "wait", B_CURSOR_ID_PROGRESS },
++	{ "progress", B_CURSOR_ID_PROGRESS },
++	{ "left_ptr_watch", B_CURSOR_ID_PROGRESS },
++	{ "help", B_CURSOR_ID_HELP },
++	{ "question_arrow", B_CURSOR_ID_HELP },
++	{ "whats_this", B_CURSOR_ID_HELP },
++	{ "left_ptr_help", B_CURSOR_ID_HELP },
++	{ "not-allowed", B_CURSOR_ID_NOT_ALLOWED },
++	{ "no-drop", B_CURSOR_ID_NOT_ALLOWED },
++	{ "crossed_circle", B_CURSOR_ID_NOT_ALLOWED },
++	{ "forbidden", B_CURSOR_ID_NOT_ALLOWED },
++	{ "dnd-no-drop", B_CURSOR_ID_NOT_ALLOWED },
++	{ "circle", B_CURSOR_ID_NOT_ALLOWED },
++	{ "grab", B_CURSOR_ID_GRAB },
++	{ "openhand", B_CURSOR_ID_GRAB },
++	{ "grabbing", B_CURSOR_ID_GRABBING },
++	{ "closedhand", B_CURSOR_ID_GRABBING },
++	{ "dnd-move", B_CURSOR_ID_GRABBING },
++	{ "zoom-in", B_CURSOR_ID_ZOOM_IN },
++	{ "zoom-out", B_CURSOR_ID_ZOOM_OUT },
++	{ "copy", B_CURSOR_ID_COPY },
++	{ "dnd-copy", B_CURSOR_ID_COPY },
++	{ "alias", B_CURSOR_ID_CREATE_LINK },
++	{ "dnd-link", B_CURSOR_ID_CREATE_LINK },
++	{ "context-menu", B_CURSOR_ID_CONTEXT_MENU },
++	{ "n-resize", B_CURSOR_ID_RESIZE_NORTH },
++	{ "top_side", B_CURSOR_ID_RESIZE_NORTH },
++	{ "s-resize", B_CURSOR_ID_RESIZE_SOUTH },
++	{ "bottom_side", B_CURSOR_ID_RESIZE_SOUTH },
++	{ "e-resize", B_CURSOR_ID_RESIZE_EAST },
++	{ "right_side", B_CURSOR_ID_RESIZE_EAST },
++	{ "w-resize", B_CURSOR_ID_RESIZE_WEST },
++	{ "left_side", B_CURSOR_ID_RESIZE_WEST },
++	{ "ne-resize", B_CURSOR_ID_RESIZE_NORTH_EAST },
++	{ "top_right_corner", B_CURSOR_ID_RESIZE_NORTH_EAST },
++	{ "nw-resize", B_CURSOR_ID_RESIZE_NORTH_WEST },
++	{ "top_left_corner", B_CURSOR_ID_RESIZE_NORTH_WEST },
++	{ "se-resize", B_CURSOR_ID_RESIZE_SOUTH_EAST },
++	{ "bottom_right_corner", B_CURSOR_ID_RESIZE_SOUTH_EAST },
++	{ "sw-resize", B_CURSOR_ID_RESIZE_SOUTH_WEST },
++	{ "bottom_left_corner", B_CURSOR_ID_RESIZE_SOUTH_WEST },
++	{ "ns-resize", B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ "row-resize", B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ "sb_v_double_arrow", B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ "v_double_arrow", B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ "size_ver", B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ "split_v", B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ "ew-resize", B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ "col-resize", B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ "sb_h_double_arrow", B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ "h_double_arrow", B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ "size_hor", B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ "split_h", B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ "nesw-resize", B_CURSOR_ID_RESIZE_NORTH_EAST_SOUTH_WEST },
++	{ "size_bdiag", B_CURSOR_ID_RESIZE_NORTH_EAST_SOUTH_WEST },
++	{ "fd_double_arrow", B_CURSOR_ID_RESIZE_NORTH_EAST_SOUTH_WEST },
++	{ "nwse-resize", B_CURSOR_ID_RESIZE_NORTH_WEST_SOUTH_EAST },
++	{ "size_fdiag", B_CURSOR_ID_RESIZE_NORTH_WEST_SOUTH_EAST },
++	{ "bd_double_arrow", B_CURSOR_ID_RESIZE_NORTH_WEST_SOUTH_EAST },
++	{ "none", B_CURSOR_ID_NO_CURSOR },
++	{ "blank", B_CURSOR_ID_NO_CURSOR },
++	{ NULL, B_CURSOR_ID_SYSTEM_DEFAULT }
++};
++
++struct VGlyphCursor {
++	int			glyph;
++	BCursorID	id;
++};
++
++// Core cursor font shapes with a system equivalent; the others are drawn
++// from their bitmaps.
++static const VGlyphCursor kGlyphCursors[] = {
++	{ XC_X_cursor, B_CURSOR_ID_NOT_ALLOWED },
++	{ XC_arrow, B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ XC_top_left_arrow, B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ XC_left_ptr, B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ XC_right_ptr, B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ XC_center_ptr, B_CURSOR_ID_SYSTEM_DEFAULT },
++	{ XC_xterm, B_CURSOR_ID_I_BEAM },
++	{ XC_hand1, B_CURSOR_ID_FOLLOW_LINK },
++	{ XC_hand2, B_CURSOR_ID_FOLLOW_LINK },
++	{ XC_fleur, B_CURSOR_ID_MOVE },
++	{ XC_crosshair, B_CURSOR_ID_CROSS_HAIR },
++	{ XC_cross, B_CURSOR_ID_CROSS_HAIR },
++	{ XC_cross_reverse, B_CURSOR_ID_CROSS_HAIR },
++	{ XC_tcross, B_CURSOR_ID_CROSS_HAIR },
++	{ XC_watch, B_CURSOR_ID_PROGRESS },
++	{ XC_question_arrow, B_CURSOR_ID_HELP },
++	{ XC_pirate, B_CURSOR_ID_NOT_ALLOWED },
++	{ XC_circle, B_CURSOR_ID_NOT_ALLOWED },
++	{ XC_top_side, B_CURSOR_ID_RESIZE_NORTH },
++	{ XC_bottom_side, B_CURSOR_ID_RESIZE_SOUTH },
++	{ XC_right_side, B_CURSOR_ID_RESIZE_EAST },
++	{ XC_left_side, B_CURSOR_ID_RESIZE_WEST },
++	{ XC_top_right_corner, B_CURSOR_ID_RESIZE_NORTH_EAST },
++	{ XC_top_left_corner, B_CURSOR_ID_RESIZE_NORTH_WEST },
++	{ XC_bottom_right_corner, B_CURSOR_ID_RESIZE_SOUTH_EAST },
++	{ XC_bottom_left_corner, B_CURSOR_ID_RESIZE_SOUTH_WEST },
++	{ XC_sb_v_double_arrow, B_CURSOR_ID_RESIZE_NORTH_SOUTH },
++	{ XC_sb_h_double_arrow, B_CURSOR_ID_RESIZE_EAST_WEST },
++	{ -1, B_CURSOR_ID_SYSTEM_DEFAULT }
++};
++
++
++static uint32
++vHashBytes(uint32 hash, const void* data, size_t length)
++{
++	const uint8* bytes = (const uint8*)data;
++	for (size_t i = 0; i < length; i++)
++		hash = (hash ^ bytes[i]) * 16777619u;
++	return hash;
++}
++
++
++static uint32
++vBitsHash(CursorBitsPtr bits)
++{
++	uint16 metrics[4] = { bits->width, bits->height, bits->xhot, bits->yhot };
++	size_t size = (size_t)BitmapBytePad(bits->width) * bits->height;
++	uint32 hash = 2166136261u;
++	hash = vHashBytes(hash, metrics, sizeof(metrics));
++	if (bits->source != NULL)
++		hash = vHashBytes(hash, bits->source, size);
++	if (bits->mask != NULL)
++		hash = vHashBytes(hash, bits->mask, size);
++	return hash;
++}
++
++
++// Core glyph cursors keep no glyph id; recognise them by the bits the
++// server builds for each shape of its own cursor font.
++static void
++vBuildGlyphTable()
++{
++	sGlyphsBuilt = true;
++
++	XID font = FakeClientID(0);
++	const char* name = "cursor";
++	if (OpenFont(serverClient, font, FontLoadAll | FontOpenSync,
++			(unsigned)strlen(name), name) != Success) {
++		return;
++	}
++
++	for (int i = 0; kGlyphCursors[i].glyph >= 0; i++) {
++		CursorPtr cursor = NULL;
++		int glyph = kGlyphCursors[i].glyph;
++		if (AllocGlyphCursor(font, glyph, font, glyph + 1, 0, 0, 0, ~0, ~0,
++				~0, &cursor, serverClient, (XID)0) != Success
++			|| cursor == NULL) {
++			continue;
++		}
++
++		VGlyphEntry entry = { vBitsHash(cursor->bits), glyph };
++		sGlyphs.push_back(entry);
++		FreeCursor(cursor, (XID)0);
++	}
++}
++
++
++static bool
++vMapGlyph(CursorPtr cursor, BCursorID* id)
++{
++	if (cursor->bits->argb != NULL || cursor->bits->source == NULL)
++		return false;
++
++	if (!sGlyphsBuilt)
++		vBuildGlyphTable();
++
++	uint32 hash = vBitsHash(cursor->bits);
++	for (size_t i = 0; i < sGlyphs.size(); i++) {
++		if (sGlyphs[i].hash != hash)
++			continue;
++		for (int j = 0; kGlyphCursors[j].glyph >= 0; j++) {
++			if (kGlyphCursors[j].glyph == sGlyphs[i].glyph) {
++				*id = kGlyphCursors[j].id;
++				return true;
++			}
++		}
++	}
++	return false;
++}
++
++
++static bool
++vMapName(CursorPtr cursor, BCursorID* id)
++{
++	if (cursor->name == None)
++		return false;
++
++	const char* name = NameForAtom(cursor->name);
++	if (name == NULL)
++		return false;
++
++	for (int i = 0; kNamedCursors[i].name != NULL; i++) {
++		if (strcmp(kNamedCursors[i].name, name) == 0) {
++			*id = kNamedCursors[i].id;
++			return true;
++		}
++	}
++	return false;
++}
++
++
++static inline bool
++vBitSet(const unsigned char* row, int x)
++{
++#if BITMAP_BIT_ORDER == LSBFirst
++	return (row[x >> 3] >> (x & 7)) & 1;
++#else
++	return (row[x >> 3] >> (7 - (x & 7))) & 1;
++#endif
++}
++
++
++static BBitmap*
++vCursorBitmap(CursorPtr cursor)
++{
++	CursorBitsPtr bits = cursor->bits;
++	int width = bits->width;
++	int height = bits->height;
++	if (width <= 0 || height <= 0)
++		return NULL;
++
++	BBitmap* bitmap = new(std::nothrow) BBitmap(
++		BRect(0, 0, width - 1, height - 1), B_RGBA32);
++	if (bitmap == NULL || bitmap->InitCheck() != B_OK) {
++		delete bitmap;
++		return NULL;
++	}
++
++	uint8* out = (uint8*)bitmap->Bits();
++	int32 outStride = bitmap->BytesPerRow();
++
++	if (bits->argb != NULL) {
++		// Premultiplied ARGB to straight alpha.
++		for (int y = 0; y < height; y++) {
++			uint8* row = out + y * outStride;
++			for (int x = 0; x < width; x++) {
++				CARD32 pixel = bits->argb[y * width + x];
++				uint32 alpha = pixel >> 24;
++				uint32 red = (pixel >> 16) & 0xff;
++				uint32 green = (pixel >> 8) & 0xff;
++				uint32 blue = pixel & 0xff;
++				if (alpha != 0 && alpha != 255) {
++					red = red * 255 / alpha;
++					green = green * 255 / alpha;
++					blue = blue * 255 / alpha;
++					if (red > 255)
++						red = 255;
++					if (green > 255)
++						green = 255;
++					if (blue > 255)
++						blue = 255;
++				}
++				row[x * 4 + 0] = blue;
++				row[x * 4 + 1] = green;
++				row[x * 4 + 2] = red;
++				row[x * 4 + 3] = alpha;
++			}
++		}
++		return bitmap;
++	}
++
++	int stride = BitmapBytePad(width);
++	uint8 fore[3] = { (uint8)(cursor->foreBlue >> 8),
++		(uint8)(cursor->foreGreen >> 8), (uint8)(cursor->foreRed >> 8) };
++	uint8 back[3] = { (uint8)(cursor->backBlue >> 8),
++		(uint8)(cursor->backGreen >> 8), (uint8)(cursor->backRed >> 8) };
++
++	for (int y = 0; y < height; y++) {
++		uint8* row = out + y * outStride;
++		const unsigned char* source = bits->source + y * stride;
++		const unsigned char* mask = bits->mask + y * stride;
++		for (int x = 0; x < width; x++) {
++			if (!vBitSet(mask, x)) {
++				memset(row + x * 4, 0, 4);
++				continue;
++			}
++			const uint8* color = vBitSet(source, x) ? fore : back;
++			row[x * 4 + 0] = color[0];
++			row[x * 4 + 1] = color[1];
++			row[x * 4 + 2] = color[2];
++			row[x * 4 + 3] = 255;
++		}
++	}
++	return bitmap;
++}
++
++
++static BCursor*
++vCreateCursor(CursorPtr cursor)
++{
++	if (cursor == NULL)
++		return new(std::nothrow) BCursor(B_CURSOR_ID_NO_CURSOR);
++
++	CursorBitsPtr bits = cursor->bits;
++	if (bits == NULL || (bits->emptyMask && bits->argb == NULL))
++		return new(std::nothrow) BCursor(B_CURSOR_ID_NO_CURSOR);
++
++	BCursorID id;
++	if (vMapName(cursor, &id) || vMapGlyph(cursor, &id))
++		return new(std::nothrow) BCursor(id);
++
++	BBitmap* bitmap = vCursorBitmap(cursor);
++	if (bitmap == NULL)
++		return NULL;
++
++	BCursor* result = new(std::nothrow) BCursor(bitmap,
++		BPoint(bits->xhot, bits->yhot));
++	delete bitmap;
++	if (result != NULL && result->InitCheck() != B_OK) {
++		delete result;
++		result = NULL;
++	}
++	return result;
++}
++
++
++static BCursor*
++vCursorFor(CursorPtr cursor, uint32 key)
++{
++	std::map<uint32, BCursor*>::iterator found = sCursors.find(key);
++	if (found != sCursors.end())
++		return found->second;
++
++	BCursor* result = vCreateCursor(cursor);
++	if (result == NULL)
++		return NULL;
++
++	// The server keeps the ones in use; dropping all is cheap to refill.
++	if (sCursors.size() >= kMaxCachedCursors) {
++		for (found = sCursors.begin(); found != sCursors.end(); ++found)
++			delete found->second;
++		sCursors.clear();
++	}
++	sCursors[key] = result;
++	return result;
++}
++
++
++// The surface of the toplevel the pointer is in, or the grab's.
++static VWindowPriv*
++vPointerSurface(DeviceIntPtr pDev)
++{
++	if (pDev->spriteInfo == NULL || pDev->spriteInfo->sprite == NULL)
++		return NULL;
++
++	WindowPtr pWin = pDev->spriteInfo->sprite->win;
++	if (pDev->deviceGrab.grab != NULL
++		&& pDev->deviceGrab.grab->window != NULL) {
++		pWin = pDev->deviceGrab.grab->window;
++	}
++
++	while (pWin != NULL && pWin->parent != NULL
++		&& pWin->parent->parent != NULL) {
++		pWin = pWin->parent;
++	}
++
++	if (pWin == NULL || pWin->parent == NULL)
++		return NULL;
++
++	VWindowPriv* priv = VWindowPrivFor(pWin);
++	if (priv == NULL || priv->surface == NULL)
++		return NULL;
++	return priv;
++}
++
++
++void
++VCursorApply(DeviceIntPtr pDev)
++{
++	if (pDev != inputInfo.pointer || !sCurrentKnown)
++		return;
++
++	VWindowPriv* priv = vPointerSurface(pDev);
++	if (priv == NULL)
++		return;
++
++	uint32 key = sCurrent != NULL ? sCurrent->serialNumber : kHiddenKey;
++	if (priv->cursorKey == key && priv->cursorSet)
++		return;
++
++	BCursor* cursor = vCursorFor(sCurrent, key);
++	if (cursor == NULL)
++		return;
++
++	priv->surface->SetCursor(cursor);
++	priv->cursorKey = key;
++	priv->cursorSet = true;
++}
++
++
++void
++VCursorSet(DeviceIntPtr pDev, CursorPtr pCursor)
++{
++	if (pDev != inputInfo.pointer)
++		return;
++
++	// NULL is XFixes hiding the pointer.
++	if (pCursor != NULL)
++		RefCursor(pCursor);
++	if (sCurrent != NULL)
++		FreeCursor(sCurrent, (XID)0);
++	sCurrent = pCursor;
++	sCurrentKnown = true;
++	VCursorApply(pDev);
 +}
 diff --git a/hw/vitruvian/vDnd.cpp b/hw/vitruvian/vDnd.cpp
 new file mode 100644
