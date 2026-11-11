@@ -432,7 +432,7 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,952 @@
+@@ -0,0 +1,959 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1167,17 +1167,24 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    return WrapCursor(new (std::nothrow) BCursor(&bitmap, BPoint(hot_x, hot_y)));
 +}
 +
++// Per surface, so app_server restores its own cursor outside the window.
 +static bool VOS_ShowCursor(SDL_Cursor *cursor)
 +{
-+    if (!be_app) {
-+        return false;
-+    }
-+    if (!cursor) {
-+        be_app->HideCursor();
++    static BCursor *hidden = NULL;
++    SDL_Window *focus = SDL_GetMouseFocus();
++    if (!focus || !focus->internal) {
 +        return true;
 +    }
-+    be_app->SetCursor((BCursor *)cursor->internal);
-+    be_app->ShowCursor();
++    const BCursor *shown;
++    if (cursor) {
++        shown = (BCursor *)cursor->internal;
++    } else {
++        if (!hidden) {
++            hidden = new (std::nothrow) BCursor(B_CURSOR_ID_NO_CURSOR);
++        }
++        shown = hidden;
++    }
++    focus->internal->surface->SetCursor(shown);
 +    return true;
 +}
 +
