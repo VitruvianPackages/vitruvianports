@@ -436,7 +436,7 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,897 @@
+@@ -0,0 +1,973 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -484,7 +484,9 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +enum {
 +    kButtonLeft = 1,
 +    kButtonRight = 2,
-+    kButtonMiddle = 4
++    kButtonMiddle = 4,
++    kButtonX1 = 8,
++    kButtonX2 = 16
 +};
 +
 +
@@ -511,15 +513,20 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +
 +//  MARK: - Display
 +
-+static bool VOS_InitModes(SDL_VideoDevice *_this)
++static void ScreenMode(SDL_DisplayMode *mode)
 +{
 +    BRect frame = BScreen(B_MAIN_SCREEN_ID).Frame();
++    SDL_zerop(mode);
++    mode->format = SDL_PIXELFORMAT_XRGB8888;
++    mode->w = (int)frame.IntegerWidth() + 1;
++    mode->h = (int)frame.IntegerHeight() + 1;
++    mode->refresh_rate = 60.0f;
++}
++
++static bool VOS_InitModes(SDL_VideoDevice *_this)
++{
 +    SDL_DisplayMode mode;
-+    SDL_zero(mode);
-+    mode.format = SDL_PIXELFORMAT_XRGB8888;
-+    mode.w = (int)frame.IntegerWidth() + 1;
-+    mode.h = (int)frame.IntegerHeight() + 1;
-+    mode.refresh_rate = 60.0f;
++    ScreenMode(&mode);
 +    return SDL_AddBasicVideoDisplay(&mode) != 0;
 +}
 +
@@ -534,6 +541,23 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +}
 +
 +//  MARK: - Windows
++
++// The server only enforces its own limits: hold the window inside SDL's.
++static void ClampSize(SDL_Window *window, int *w, int *h)
++{
++    if (window->min_w > 0 && *w < window->min_w) {
++        *w = window->min_w;
++    }
++    if (window->min_h > 0 && *h < window->min_h) {
++        *h = window->min_h;
++    }
++    if (window->max_w > 0 && *w > window->max_w) {
++        *w = window->max_w;
++    }
++    if (window->max_h > 0 && *h > window->max_h) {
++        *h = window->max_h;
++    }
++}
 +
 +static bool VOS_CreateWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_PropertiesID create_props)
 +{
@@ -555,7 +579,10 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    }
 +    data->look = (window->flags & SDL_WINDOW_BORDERLESS) ? B_NO_BORDER_WINDOW_LOOK : B_TITLED_WINDOW_LOOK;
 +
-+    data->surface = new (std::nothrow) BSurface(FrameFor(window->x, window->y, window->w, window->h),
++    int w = window->w, h = window->h;
++    ClampSize(window, &w, &h);
++
++    data->surface = new (std::nothrow) BSurface(FrameFor(window->x, window->y, w, h),
 +                                                window->title ? window->title : "", data->look,
 +                                                B_NORMAL_WINDOW_FEEL, flags);
 +    if (!data->surface || data->surface->InitCheck() != B_OK) {
@@ -596,9 +623,29 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    return true;
 +}
 +
++static void ReportFrame(SDL_WindowData *data);
++
 +static void VOS_SetWindowSize(SDL_VideoDevice *_this, SDL_Window *window)
 +{
-+    window->internal->surface->ResizeTo(window->floating.w - 1, window->floating.h - 1);
++    int w = window->floating.w, h = window->floating.h;
++    ClampSize(window, &w, &h);
++    window->internal->surface->ResizeTo(w - 1, h - 1);
++}
++
++static void VOS_SetWindowMinMaxSize(SDL_VideoDevice *_this, SDL_Window *window)
++{
++    SDL_WindowData *data = window->internal;
++    if (data->fullscreen) {
++        return;
++    }
++    BRect frame = data->surface->Frame();
++    int w = (int)frame.IntegerWidth() + 1;
++    int h = (int)frame.IntegerHeight() + 1;
++    ClampSize(window, &w, &h);
++    if (w != (int)frame.IntegerWidth() + 1 || h != (int)frame.IntegerHeight() + 1) {
++        data->surface->ResizeTo(w - 1, h - 1);
++        ReportFrame(data);
++    }
 +}
 +
 +static void VOS_ShowWindow(SDL_VideoDevice *_this, SDL_Window *window)
@@ -809,7 +856,9 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    static const struct { int32 mask; Uint8 button; } kMap[] = {
 +        { kButtonLeft, SDL_BUTTON_LEFT },
 +        { kButtonRight, SDL_BUTTON_RIGHT },
-+        { kButtonMiddle, SDL_BUTTON_MIDDLE }
++        { kButtonMiddle, SDL_BUTTON_MIDDLE },
++        { kButtonX1, SDL_BUTTON_X1 },
++        { kButtonX2, SDL_BUTTON_X2 }
 +    };
 +    for (size_t i = 0; i < SDL_arraysize(kMap); i++) {
 +        bool was = (data->buttons & kMap[i].mask) != 0;
@@ -873,11 +922,36 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    {
 +        int32 w = msg.GetInt32("width", -1) + 1;
 +        int32 h = msg.GetInt32("height", -1) + 1;
++        if (w > 0 && h > 0 && !data->fullscreen && !data->zoomed) {
++            int cw = w, ch = h;
++            ClampSize(window, &cw, &ch);
++            if (cw != w || ch != h) {
++                data->surface->ResizeTo(cw - 1, ch - 1);
++                w = cw;
++                h = ch;
++            }
++        }
 +        if (w > 0 && h > 0) {
 +#ifdef SDL_VIDEO_OPENGL_EGL
 +            VOS_GL_WindowResized(SDL_GetVideoDevice(), window);
 +#endif
 +            SDL_SendWindowEvent(window, SDL_EVENT_WINDOW_RESIZED, w, h);
++        }
++        break;
++    }
++    case B_SCREEN_CHANGED:
++    {
++        SDL_DisplayMode mode;
++        ScreenMode(&mode);
++        SDL_VideoDisplay *display = SDL_GetVideoDisplay(SDL_GetPrimaryDisplay());
++        if (display) {
++            SDL_SetDesktopDisplayMode(display, &mode);
++        }
++        if (data->fullscreen) {
++            BRect screen = BScreen(B_MAIN_SCREEN_ID).Frame();
++            data->surface->MoveTo(screen.LeftTop());
++            data->surface->ResizeTo(screen.Width(), screen.Height());
++            ReportFrame(data);
 +        }
 +        break;
 +    }
@@ -1297,6 +1371,8 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    device->RestoreWindow = VOS_RestoreWindow;
 +    device->SetWindowBordered = VOS_SetWindowBordered;
 +    device->SetWindowResizable = VOS_SetWindowResizable;
++    device->SetWindowMinimumSize = VOS_SetWindowMinMaxSize;
++    device->SetWindowMaximumSize = VOS_SetWindowMinMaxSize;
 +    device->SetWindowFullscreen = VOS_SetWindowFullscreen;
 +    device->SetWindowMouseGrab = VOS_SetWindowMouseGrab;
 +    device->DestroyWindow = VOS_DestroyWindow;
