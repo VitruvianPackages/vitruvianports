@@ -5,7 +5,7 @@ Forwarded: not-needed
 diff --git a/CMakeLists.txt b/CMakeLists.txt
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -3000,6 +3000,37 @@
+@@ -3000,6 +3000,37 @@ endif()
  
  # Platform-independent options
  
@@ -57,7 +57,7 @@ diff --git a/include/build_config/SDL_build_config.h.cmake b/include/build_confi
 diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
 --- a/src/video/SDL_sysvideo.h
 +++ b/src/video/SDL_sysvideo.h
-@@ -515,6 +515,7 @@
+@@ -515,6 +515,7 @@ extern VideoBootStrap COCOA_bootstrap;
  extern VideoBootStrap X11_bootstrap;
  extern VideoBootStrap WINDOWS_bootstrap;
  extern VideoBootStrap HAIKU_bootstrap;
@@ -68,7 +68,7 @@ diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
 diff --git a/src/video/SDL_video.c b/src/video/SDL_video.c
 --- a/src/video/SDL_video.c
 +++ b/src/video/SDL_video.c
-@@ -83,6 +83,9 @@
+@@ -83,6 +83,9 @@ static VideoBootStrap *bootstrap[] = {
  #ifdef SDL_VIDEO_DRIVER_COCOA
      &COCOA_bootstrap,
  #endif
@@ -436,7 +436,7 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,698 @@
+@@ -0,0 +1,867 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -451,6 +451,8 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +#include <Screen.h>
 +#include <Surface.h>
 +#include <Bitmap.h>
++#include <Clipboard.h>
++#include <Cursor.h>
 +
 +#include <errno.h>
 +#include <poll.h>
@@ -1024,6 +1026,165 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    // The buffer belongs to the surface.
 +}
 +
++//  MARK: - Cursor
++
++static BCursorID CursorIdFor(SDL_SystemCursor id)
++{
++    switch (id) {
++    case SDL_SYSTEM_CURSOR_TEXT:
++        return B_CURSOR_ID_I_BEAM;
++    case SDL_SYSTEM_CURSOR_WAIT:
++    case SDL_SYSTEM_CURSOR_PROGRESS:
++        return B_CURSOR_ID_PROGRESS;
++    case SDL_SYSTEM_CURSOR_CROSSHAIR:
++        return B_CURSOR_ID_CROSS_HAIR;
++    case SDL_SYSTEM_CURSOR_NWSE_RESIZE:
++        return B_CURSOR_ID_RESIZE_NORTH_WEST_SOUTH_EAST;
++    case SDL_SYSTEM_CURSOR_NESW_RESIZE:
++        return B_CURSOR_ID_RESIZE_NORTH_EAST_SOUTH_WEST;
++    case SDL_SYSTEM_CURSOR_EW_RESIZE:
++        return B_CURSOR_ID_RESIZE_EAST_WEST;
++    case SDL_SYSTEM_CURSOR_NS_RESIZE:
++        return B_CURSOR_ID_RESIZE_NORTH_SOUTH;
++    case SDL_SYSTEM_CURSOR_MOVE:
++        return B_CURSOR_ID_MOVE;
++    case SDL_SYSTEM_CURSOR_NOT_ALLOWED:
++        return B_CURSOR_ID_NOT_ALLOWED;
++    case SDL_SYSTEM_CURSOR_POINTER:
++        return B_CURSOR_ID_FOLLOW_LINK;
++    case SDL_SYSTEM_CURSOR_NW_RESIZE:
++        return B_CURSOR_ID_RESIZE_NORTH_WEST;
++    case SDL_SYSTEM_CURSOR_N_RESIZE:
++        return B_CURSOR_ID_RESIZE_NORTH;
++    case SDL_SYSTEM_CURSOR_NE_RESIZE:
++        return B_CURSOR_ID_RESIZE_NORTH_EAST;
++    case SDL_SYSTEM_CURSOR_E_RESIZE:
++        return B_CURSOR_ID_RESIZE_EAST;
++    case SDL_SYSTEM_CURSOR_SE_RESIZE:
++        return B_CURSOR_ID_RESIZE_SOUTH_EAST;
++    case SDL_SYSTEM_CURSOR_S_RESIZE:
++        return B_CURSOR_ID_RESIZE_SOUTH;
++    case SDL_SYSTEM_CURSOR_SW_RESIZE:
++        return B_CURSOR_ID_RESIZE_SOUTH_WEST;
++    case SDL_SYSTEM_CURSOR_W_RESIZE:
++        return B_CURSOR_ID_RESIZE_WEST;
++    default:
++        return B_CURSOR_ID_SYSTEM_DEFAULT;
++    }
++}
++
++static SDL_Cursor *WrapCursor(BCursor *cursor)
++{
++    if (!cursor || cursor->InitCheck() != B_OK) {
++        delete cursor;
++        SDL_SetError("Could not create a V\\OS cursor");
++        return NULL;
++    }
++    SDL_Cursor *result = (SDL_Cursor *)SDL_calloc(1, sizeof(*result));
++    if (!result) {
++        delete cursor;
++        return NULL;
++    }
++    result->internal = (SDL_CursorData *)cursor;
++    return result;
++}
++
++static SDL_Cursor *VOS_CreateSystemCursor(SDL_SystemCursor id)
++{
++    return WrapCursor(new (std::nothrow) BCursor(CursorIdFor(id)));
++}
++
++static SDL_Cursor *VOS_CreateCursor(SDL_Surface *surface, int hot_x, int hot_y)
++{
++    SDL_Surface *argb = SDL_ConvertSurface(surface, SDL_PIXELFORMAT_ARGB8888);
++    if (!argb) {
++        return NULL;
++    }
++    BBitmap bitmap(BRect(0, 0, argb->w - 1, argb->h - 1), B_RGBA32);
++    if (bitmap.InitCheck() != B_OK) {
++        SDL_DestroySurface(argb);
++        return NULL;
++    }
++    for (int y = 0; y < argb->h; y++) {
++        memcpy((uint8 *)bitmap.Bits() + y * bitmap.BytesPerRow(),
++               (uint8 *)argb->pixels + y * argb->pitch, argb->w * 4);
++    }
++    SDL_DestroySurface(argb);
++    return WrapCursor(new (std::nothrow) BCursor(&bitmap, BPoint(hot_x, hot_y)));
++}
++
++static bool VOS_ShowCursor(SDL_Cursor *cursor)
++{
++    if (!be_app) {
++        return false;
++    }
++    if (!cursor) {
++        be_app->HideCursor();
++        return true;
++    }
++    be_app->SetCursor((BCursor *)cursor->internal);
++    be_app->ShowCursor();
++    return true;
++}
++
++static void VOS_FreeCursor(SDL_Cursor *cursor)
++{
++    delete (BCursor *)cursor->internal;
++    SDL_free(cursor);
++}
++
++//  MARK: - Clipboard
++
++static bool VOS_SetClipboardText(SDL_VideoDevice *_this, const char *text)
++{
++    if (!be_clipboard->Lock()) {
++        return false;
++    }
++    be_clipboard->Clear();
++    bool ok = false;
++    BMessage *data = be_clipboard->Data();
++    if (data && data->AddData("text/plain", B_MIME_TYPE, text, SDL_strlen(text)) == B_OK) {
++        ok = be_clipboard->Commit() == B_OK;
++    }
++    be_clipboard->Unlock();
++    return ok;
++}
++
++static char *VOS_GetClipboardText(SDL_VideoDevice *_this)
++{
++    const char *bytes = NULL;
++    ssize_t length = 0;
++    char *result = NULL;
++    if (be_clipboard->Lock()) {
++        BMessage *data = be_clipboard->Data();
++        if (data && data->FindData("text/plain", B_MIME_TYPE,
++                                   (const void **)&bytes, &length) == B_OK
++                && length > 0) {
++            result = (char *)SDL_malloc(length + 1);
++            if (result) {
++                SDL_memcpy(result, bytes, length);
++                result[length] = '\0';
++            }
++        }
++        be_clipboard->Unlock();
++    }
++    return result ? result : SDL_strdup("");
++}
++
++static bool VOS_HasClipboardText(SDL_VideoDevice *_this)
++{
++    const void *bytes;
++    ssize_t length = 0;
++    bool has = false;
++    if (be_clipboard->Lock()) {
++        BMessage *data = be_clipboard->Data();
++        has = data && data->FindData("text/plain", B_MIME_TYPE, &bytes, &length) == B_OK
++              && length > 0;
++        be_clipboard->Unlock();
++    }
++    return has;
++}
++
 +//  MARK: - Device
 +
 +static bool VOS_VideoInit(SDL_VideoDevice *_this)
@@ -1043,6 +1204,10 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    SDL_Mouse *mouse = SDL_GetMouse();
 +    if (mouse) {
 +        mouse->SetRelativeMouseMode = VOS_SetRelativeMouseMode;
++        mouse->CreateCursor = VOS_CreateCursor;
++        mouse->CreateSystemCursor = VOS_CreateSystemCursor;
++        mouse->ShowCursor = VOS_ShowCursor;
++        mouse->FreeCursor = VOS_FreeCursor;
 +    }
 +    SDL_AddKeyboard(SDL_DEFAULT_KEYBOARD_ID, NULL, false);
 +    SDL_AddMouse(SDL_DEFAULT_MOUSE_ID, NULL, false);
@@ -1120,6 +1285,10 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    device->GL_SwapWindow = VOS_GL_SwapWindow;
 +    device->GL_DestroyContext = VOS_GL_DestroyContext;
 +#endif
++
++    device->SetClipboardText = VOS_SetClipboardText;
++    device->GetClipboardText = VOS_GetClipboardText;
++    device->HasClipboardText = VOS_HasClipboardText;
 +
 +    device->free = VOS_DeleteDevice;
 +    return device;
