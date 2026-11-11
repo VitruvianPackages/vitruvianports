@@ -436,7 +436,7 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,867 @@
+@@ -0,0 +1,897 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -445,12 +445,14 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +
 +#ifdef SDL_VIDEO_DRIVER_VOS
 +
++#include <AppFileInfo.h>
 +#include <Application.h>
 +#include <Message.h>
 +#include <OS.h>
 +#include <Screen.h>
 +#include <Surface.h>
 +#include <Bitmap.h>
++#include <File.h>
 +#include <Clipboard.h>
 +#include <Cursor.h>
 +
@@ -458,6 +460,9 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +#include <poll.h>
 +#include <fcntl.h>
 +#include <unistd.h>
++
++#include <dlfcn.h>
++#include <limits.h>
 +
 +#include <new>
 +
@@ -1187,10 +1192,35 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +
 +//  MARK: - Device
 +
++// Own signature, else the generated X client one, else a fixed default.
++static void VOS_AppSignature(char *out, size_t len)
++{
++    char path[PATH_MAX];
++    ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
++    if (n > 0) {
++        path[n] = '\0';
++        BFile file(path, B_READ_ONLY);
++        BAppFileInfo info(&file);
++        if (file.InitCheck() == B_OK && info.GetSignature(out) == B_OK && out[0] != '\0') {
++            return;
++        }
++        typedef int (*SignatureFn)(const char *, char *, size_t);
++        void *lib = dlopen("libvos_x_client.so", RTLD_NOW);
++        SignatureFn fn = lib ? (SignatureFn)dlsym(lib, "vos_x_client_signature") : NULL;
++        if (fn != NULL && fn(path, out, len) == 0 && out[0] != '\0') {
++            return;
++        }
++    }
++    SDL_strlcpy(out, "application/x-vnd.vos-sdl", len);
++}
++
 +static bool VOS_VideoInit(SDL_VideoDevice *_this)
 +{
 +    if (be_app == NULL) {
-+        BApplication *app = new (std::nothrow) BApplication("application/x-vnd.vos-sdl");
++        char signature[B_MIME_TYPE_LENGTH];
++        signature[0] = '\0';
++        VOS_AppSignature(signature, sizeof(signature));
++        BApplication *app = new (std::nothrow) BApplication(signature);
 +        if (app == NULL || app->InitCheck() != B_OK) {
 +            delete app;
 +            return SDL_SetError("Cannot connect to the V\\OS app server");
