@@ -1,0 +1,51 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: take the open-source registration path
+Forwarded: not-needed
+Author: Numerio <b.vitruvio@gmail.com>
+Description:
+ The key file check of the commercial releases is compiled in unless
+ the legacy platform macro is set. With no key file it calls
+ fclose(NULL) and the app crashes at startup. Use the open-source
+ path, which needs no key file.
+
+--- a/source/AboutView.cpp
++++ b/source/AboutView.cpp
+@@ -59,7 +59,7 @@
+ 			DrawString(lstring(4, "Unregistered Version"), BPoint(85, 155));
+ 		} else {
+ 			SetHighColor(Grey8);
+-#if defined(__HAIKU__)
++#if 1
+ 			DrawString("Released under the MIT license", BPoint(85, 152));
+ #else
+ 			DrawString(lstring(7, "Registered to"), BPoint(85, 152));
+--- a/source/BecassoMain.cpp
++++ b/source/BecassoMain.cpp
+@@ -73,7 +73,7 @@
+ 		reg = REG_HAS_14;
+ 	fclose(db);
+ #endif
+-#if defined(__HAIKU__)
++#if 1
+ 	reg = REG_HAIKU;
+ #endif
+ 	// Other possibility: Preinstalled Becasso
+@@ -115,7 +115,6 @@
+ 	extern char gAlphaMask[128];
+ 
+ 	if (reg == REG_HAIKU) {
+-		strcat(gAlphaMask, "Haiku");
+ 	} else {
+ 		RegWindow* rw
+ 			= new RegWindow(BRect(100, 100, 440, 240), lstring(420, "Register Becasso 2.0"), reg);
+@@ -182,9 +181,8 @@
+ setup_alphabuffer()
+ {
+ 	extern int gGlobalAlpha;
+-#if defined(__HAIKU__)
++#if 1
+ 	gGlobalAlpha = 1;
+-	strcat(gAlphaMask, "Haiku");
+ #else
+ 	char buffer[256];
+ 	BPath p;

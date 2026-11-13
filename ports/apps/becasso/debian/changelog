@@ -1,3 +1,9 @@
+becasso (0.0+git20251215-2) unstable; urgency=medium
+
+  * Fix the crash at startup.
+
+ -- The Vitruvian Project <packages@v-os.dev>  Fri, 13 Nov 2026 21:30:00 +0000
+
 becasso (0.0+git20251215-1) unstable; urgency=medium
 
   * Initial package.
