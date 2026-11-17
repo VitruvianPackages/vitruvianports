@@ -10,7 +10,7 @@ Homepage: https://github.com/schotek/qt6-haikuplugins
 
 Package: qt6-vos-plugin
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${qt:Depends}
 Description: Qt 6 platform plugin for V\OS
  Runs Qt 6 applications as native V\OS applications: windows, menus,
  file dialogs, clipboard and keyboard go through the V\OS kits instead

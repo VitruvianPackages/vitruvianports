@@ -7,3 +7,9 @@ include /usr/share/dpkg/architecture.mk
 override_dh_auto_install:
 	install -D -m 0644 src/platform/libqhaiku.so \
 		debian/qt6-vos-plugin/usr/lib/$(DEB_HOST_MULTIARCH)/qt6/plugins/platforms/libqhaiku.so
+
+# Private Qt API: only the Qt it was built against will do.
+QT_VERSION := $(shell qmake6 -query QT_VERSION)
+
+override_dh_gencontrol:
+	dh_gencontrol -- -Vqt:Depends="qt6-base-private-abi (= $(QT_VERSION))"
