@@ -1,2 +1,3 @@
 debian: libsdl3
 version: 3.4.20+ds-1
+version-trixie: 3.2.10+ds-1

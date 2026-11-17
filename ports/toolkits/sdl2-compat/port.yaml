@@ -1,2 +1,3 @@
 debian: sdl2-compat
 version: 2.32.74+ds-1
+skip-trixie: yes

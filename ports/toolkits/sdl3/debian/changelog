@@ -1,4 +1,4 @@
-libsdl3 (3.2.10+ds-1vos1) unstable; urgency=medium
+libsdl3 (3.4.20+ds-1vos1) unstable; urgency=medium
 
   * Native V\OS video backend on BSurface.
   * Cursor shapes, custom cursors and text clipboard.

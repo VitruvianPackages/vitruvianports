@@ -1,4 +1,4 @@
-sdl2-compat (2.32.54+ds-1vos1) unstable; urgency=medium
+sdl2-compat (2.32.74+ds-1vos1) unstable; urgency=medium
 
   * Supersede the previous V\OS libsdl2 package.
   * Skip the build-time tests, which need the V\OS kernel interface.
