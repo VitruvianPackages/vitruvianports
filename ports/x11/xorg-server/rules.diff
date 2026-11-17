@@ -11,7 +11,7 @@ diff -urN a/debian/control b/debian/control
  Build-Depends-Indep: xz-utils
  Standards-Version: 3.9.8
  Rules-Requires-Root: binary-targets
-@@ -240,6 +243,20 @@
+@@ -238,6 +241,33 @@
   .
   This package is built from the X.org xserver module.
  
@@ -22,10 +22,23 @@ diff -urN a/debian/control b/debian/control
 + vos,
 + ${shlibs:Depends},
 + ${misc:Depends},
++Provides: xserver
 +Recommends: xauth
 +Description: rootless X server for V\OS
 + Xvitr runs X11 programs on the V\OS desktop: each X11 top-level window
 + is a native window, and keyboard and pointer input come from it.
++ .
++ This package is built from the X.org xserver module.
++
++Package: xvitruvian-launcher
++Architecture: all
++Depends:
++ xserver-xvitruvian (>= ${source:Version}),
++ ${misc:Depends},
++Description: on-demand X server for V\OS sessions
++ Starts the Xvitr X server for display :0 when the first X11 program
++ connects and stops it again once the last one has gone. Nothing runs
++ until then.
 + .
 + This package is built from the X.org xserver module.
 +
@@ -85,3 +98,40 @@ diff -urN a/debian/xvitr.rdef b/debian/xvitr.rdef
 +resource app_signature "application/x-vnd.v-os-xvitruvian";
 +
 +resource app_flags B_MULTIPLE_LAUNCH | B_BACKGROUND_APP;
+diff -urN a/debian/xvitruvian-launcher.install b/debian/xvitruvian-launcher.install
+--- a/debian/xvitruvian-launcher.install
++++ b/debian/xvitruvian-launcher.install
+@@ -0,0 +1,2 @@
++debian/xvitruvian.socket usr/lib/systemd/user
++debian/xvitruvian.service usr/lib/systemd/user
+diff -urN a/debian/xvitruvian-launcher.links b/debian/xvitruvian-launcher.links
+--- a/debian/xvitruvian-launcher.links
++++ b/debian/xvitruvian-launcher.links
+@@ -0,0 +1 @@
++usr/lib/systemd/user/xvitruvian.socket usr/lib/systemd/user/sockets.target.wants/xvitruvian.socket
+diff -urN a/debian/xvitruvian.service b/debian/xvitruvian.service
+--- a/debian/xvitruvian.service
++++ b/debian/xvitruvian.service
+@@ -0,0 +1,9 @@
++[Unit]
++Description=Xvitr X server for display :0
++Requires=xvitruvian.socket
++After=xvitruvian.socket
++
++[Service]
++# Exits on its own after a minute with no clients; the socket restarts it.
++ExecStart=/usr/bin/Xvitr :0 -listenfd 3 -nolisten tcp -noreset
++Restart=no
+diff -urN a/debian/xvitruvian.socket b/debian/xvitruvian.socket
+--- a/debian/xvitruvian.socket
++++ b/debian/xvitruvian.socket
+@@ -0,0 +1,9 @@
++[Unit]
++Description=X display :0 (Xvitr, started on demand)
++
++[Socket]
++ListenStream=/tmp/.X11-unix/X0
++SocketMode=0600
++
++[Install]
++WantedBy=sockets.target
