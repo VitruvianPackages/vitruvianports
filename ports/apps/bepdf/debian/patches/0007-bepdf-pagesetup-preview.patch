@@ -1,0 +1,41 @@
+diff --git a/bepdf/beos/PDFPrint.cpp b/bepdf/beos/PDFPrint.cpp
+index 7f9356c..b622954 100644
+--- a/bepdf/beos/PDFPrint.cpp
++++ b/bepdf/beos/PDFPrint.cpp
+@@ -44,11 +44,34 @@ PDFView::PageSetup()
+ 
+ 	BPrintJob  printJob(this->mTitle->String());
+ 
+-
++	// Tell the page setup what the document looks like, so it can start in
++	// the right orientation and show the page in its preview.
++	BMessage settings;
+ 	if (mPrintSettings != NULL) {
+ 		/* page setup has already been run */
+-		printJob.SetSettings(new BMessage(*mPrintSettings));
++		settings = *mPrintSettings;
++	}
++	if (mDoc != NULL && mCurrentPage >= 1
++		&& mCurrentPage <= mDoc->getNumPages()) {
++		float width = mDoc->getPageCropWidth(mCurrentPage);
++		float height = mDoc->getPageCropHeight(mCurrentPage);
++		if (mDoc->getPageRotate(mCurrentPage) == 90
++			|| mDoc->getPageRotate(mCurrentPage) == 270) {
++			float swap = width; width = height; height = swap;
++		}
++		if (mRotation == 90 || mRotation == 270) {
++			float swap = width; width = height; height = swap;
++		}
++		settings.RemoveName("printcups:content");
++		settings.AddRect("printcups:content", BRect(0, 0, width, height));
++	}
++	if (mBitmap != NULL && mBitmap->IsValid()) {
++		BMessage archive;
++		settings.RemoveName("printcups:preview");
++		if (mBitmap->Archive(&archive) == B_OK)
++			settings.AddMessage("printcups:preview", &archive);
+ 	}
++	printJob.SetSettings(new BMessage(settings));
+ 
+ 	result = printJob.ConfigPage();
+ 
