@@ -1,0 +1,21 @@
+Use the libc declarations of strdup/strstr: the K&R redeclaration of strstr
+collides with the string.h macro of current glibc.
+
+--- a/FindLib/findutils/fstype.c
++++ b/FindLib/findutils/fstype.c
+@@ -24,14 +24,13 @@
+ #include "defs.h"
+ #include "modetype.h"
+ #include <errno.h>
++#include <string.h>
+ #ifdef STDC_HEADERS
+ #include <stdlib.h>
+ #else
+ extern int errno;
+ #endif
+ 
+-char *strdup ();
+-char *strstr ();
+ 
+ static char *filesystem_type_uncached P_((char *path, char *relpath, struct stat *statp));
+ static int xatoi P_((char *cp));
