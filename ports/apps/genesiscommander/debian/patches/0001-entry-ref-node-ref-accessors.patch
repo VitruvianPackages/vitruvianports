@@ -1,0 +1,365 @@
+Description: adapt entry_ref/node_ref field access to the V\OS accessors
+ and make use of statx
+ V\OS encapsulates entry_ref and node_ref: the legacy public fields
+ device/directory/node became accessor methods (device(), directory(),
+ node()) with set_to() to bind values, so poking fields - and taking their
+ addresses for BMessage::FindInt32/FindInt64 - no longer compiles. Read the
+ message values into locals and bind them with set_to(); message keys and
+ semantics are unchanged. The ref name member stays public, so name
+ handling is untouched.
+Author: VitruvianOS Packagers <packages@vitruvianos.org>
+Forwarded: not-needed
+Origin: vendor, V\OS packaging
+
+diff --git a/src/FSUtils.cpp b/src/FSUtils.cpp
+index 93e62b1..cf8e84e 100644
+--- a/src/FSUtils.cpp
++++ b/src/FSUtils.cpp
+@@ -54,14 +54,18 @@ bool FSUtils::CopyFileContents(BFile *srcfile, BFile *dstfile, size_t blksize, B
+ 
+ 
+ ////////////////////////////////////////////////////////////////////////
+-void FSUtils::CopyStats(struct stat *srcstat, BNode *dst)
++void FSUtils::CopyStats(struct statx *srcstat, BNode *dst)
+ ////////////////////////////////////////////////////////////////////////
+ {
+-	dst->SetPermissions(srcstat->st_mode);
+-	dst->SetOwner(srcstat->st_uid);
+-	dst->SetGroup(srcstat->st_gid);
+-	dst->SetModificationTime(srcstat->st_mtime);
+-	dst->SetCreationTime(srcstat->st_crtime);
++	dst->SetPermissions(srcstat->stx_mode);
++	dst->SetOwner(srcstat->stx_uid);
++	dst->SetGroup(srcstat->stx_gid);
++	dst->SetModificationTime(srcstat->stx_mtime.tv_sec);
++
++	time_t crtime = (srcstat->stx_mask & STATX_BTIME)
++						? srcstat->stx_btime.tv_sec
++						: srcstat->stx_mtime.tv_sec;
++	dst->SetCreationTime(crtime);
+ }
+ 
+ ////////////////////////////////////////////////////////////////////////
+diff --git a/src/FSUtils.h b/src/FSUtils.h
+index 38c82cf..1010518 100644
+--- a/src/FSUtils.h
++++ b/src/FSUtils.h
+@@ -16,12 +16,13 @@
+ #include <StatusBar.h>
+ #include <String.h>
+ #include <Window.h>
++#include <sys/stat.h>
+ 
+ class FSUtils{
+ 
+ 	public:
+ 		static bool CopyFileContents(BFile *srcfile, BFile *dstfile, size_t blksize, BWindow *w, BStatusBar *sb);
+-		static void CopyStats(struct stat *srcstat, BNode *dst);
++		static void CopyStats(struct statx *srcstat, BNode *dst);
+ 		static bool CopyAttr(BNode *srcnode, BNode *destnode);
+ 		static bool CopyAttr(const char *srcfilename, const char *dstfilename);
+ 		static bool IsRecursiveCopyMove(const char *source, const char *destination);
+diff --git a/src/GenesisCopyWindow.cpp b/src/GenesisCopyWindow.cpp
+index b9ddfe7..4ffe4a7 100644
+--- a/src/GenesisCopyWindow.cpp
++++ b/src/GenesisCopyWindow.cpp
+@@ -618,7 +618,7 @@ bool GenesisCopyWindow::CopyFile(const char *filename, const char *destination,
+ 	BString destname;
+ 	BEntry srcentry(filename);
+ 	BEntry dstentry(destination);
+-	struct stat statbuf;
++	struct statx statbuf;
+ 	ssize_t len;
+ 
+ 	srcentry.GetName(name);
+@@ -692,18 +692,18 @@ bool GenesisCopyWindow::CopyFile(const char *filename, const char *destination,
+ 		return false;
+ 	}
+ 
+-	if (srcentry.GetStat(&statbuf)!=B_OK)
++	if (srcentry.GetStatX(&statbuf)!=B_OK)
+ 	{
+ 		return false;
+ 	}
+ 
+ 	Lock();
+ 	m_FileBar->Update(-m_FileBar->CurrentValue());	// Reset to 0.0
+-	m_FileBar->SetMaxValue(statbuf.st_size);
++	m_FileBar->SetMaxValue(statbuf.stx_size);
+ 	m_FileBar->SetTrailingText(name);
+ 	Unlock();
+ 
+-	if (!FSUtils::CopyFileContents(&srcfile, &dstfile, statbuf.st_blksize, this, m_FileBar))
++	if (!FSUtils::CopyFileContents(&srcfile, &dstfile, statbuf.stx_blksize, this, m_FileBar))
+ 		return false;
+ 
+ 	FSUtils::CopyStats(&statbuf, &dstfile);
+@@ -850,7 +850,7 @@ bool GenesisCopyWindow::CopyLink(const char *linkname, const char *destination,
+ 	BEntry symlinkentry;
+ 	BPath LinkPath;
+ 	char name[B_FILE_NAME_LENGTH];
+-	struct stat statbuf;
++	struct statx statbuf;
+ 	entry_ref ref;
+ 
+ 	srcentry.SetTo(linkname);
+@@ -862,7 +862,7 @@ bool GenesisCopyWindow::CopyLink(const char *linkname, const char *destination,
+ 	if (destfilename)
+ 		sprintf(name,"%s",destfilename);
+ 
+-	if (srcentry.GetStat(&statbuf)!=B_OK)
++	if (srcentry.GetStatX(&statbuf)!=B_OK)
+ 		return false;
+ 
+ 	dstdir.SetTo(destination);
+diff --git a/src/GenesisMoveWindow.cpp b/src/GenesisMoveWindow.cpp
+index caa5237..dc7627d 100644
+--- a/src/GenesisMoveWindow.cpp
++++ b/src/GenesisMoveWindow.cpp
+@@ -607,7 +607,7 @@ bool GenesisMoveWindow::Move(const char *filename, const char *destination, cons
+ 		destdir.SetTo(destination);
+ 		destdir.GetNodeRef(&destnode);
+ 		sourcefile.GetRef(&sourceentry);
+-		anothervol = sourceentry.device == destnode.device;
++		anothervol = sourceentry.device() == destnode.device();
+ 
+ 		dstfile.SetTo(destfullname.String());
+ 		if (dstfile.InitCheck()==B_OK && dstfile.Exists())
+@@ -778,7 +778,7 @@ bool GenesisMoveWindow::Move(const char *filename, const char *destination, cons
+ bool GenesisMoveWindow::CopyAndDelete(BEntry *sourceentry, BEntry *dstentry, BDirectory *dstdir)
+ ////////////////////////////////////////////////////////////////////////
+ {
+-	struct stat statbuf;
++	struct statx stxbuf;
+ 	char name[B_FILE_NAME_LENGTH];
+ 
+ 	if (sourceentry->IsDirectory())
+@@ -825,7 +825,7 @@ bool GenesisMoveWindow::CopyAndDelete(BEntry *sourceentry, BEntry *dstentry, BDi
+ 		return result;
+ 	}
+ 
+-	if (sourceentry->GetStat(&statbuf)!=B_OK)
++	if (sourceentry->GetStatX(&stxbuf)!=B_OK)
+ 		return false;
+ 
+ 	if (sourceentry->IsFile())
+@@ -834,13 +834,13 @@ bool GenesisMoveWindow::CopyAndDelete(BEntry *sourceentry, BEntry *dstentry, BDi
+ 		BFile dstfile(dstentry, B_WRITE_ONLY | B_CREATE_FILE | B_ERASE_FILE);
+ 
+ 		Lock();
+-		m_FileBar->SetMaxValue(statbuf.st_size);
++		m_FileBar->SetMaxValue(stxbuf.stx_size);
+ 		Unlock();
+ 
+-		if (!FSUtils::CopyFileContents(&srcfile, &dstfile, statbuf.st_blksize, this, m_FileBar))
++		if (!FSUtils::CopyFileContents(&srcfile, &dstfile, stxbuf.stx_blksize, this, m_FileBar))
+ 			return false;
+ 
+-		FSUtils::CopyStats(&statbuf, &dstfile);
++		FSUtils::CopyStats(&stxbuf, &dstfile);
+ 		FSUtils::CopyAttr(&srcfile, &dstfile);
+ 
+ 		if (sourceentry->Remove() != B_OK)
+@@ -886,7 +886,7 @@ bool GenesisMoveWindow::CopyAndDelete(BEntry *sourceentry, BEntry *dstentry, BDi
+ 
+ 		sourcelnk.SetTo(sourceentry);
+ 
+-		FSUtils::CopyStats(&statbuf, &symlink);
++		FSUtils::CopyStats(&stxbuf, &symlink);
+ 		FSUtils::CopyAttr(&sourcelnk, &symlink);
+ 
+ 		if (sourceentry->Remove() != B_OK)
+diff --git a/src/GenesisPanelView.cpp b/src/GenesisPanelView.cpp
+index 0c462d4..8427b16 100644
+--- a/src/GenesisPanelView.cpp
++++ b/src/GenesisPanelView.cpp
+@@ -376,64 +376,68 @@ void PanelView::MessageReceived(BMessage* message)
+ 			}
+ 			break;
+ 		case B_NODE_MONITOR:
+-			{
+-				BEntry entry;
+-				int32 opcode;
+-				const char *name;
+-				entry_ref ref;
+-				node_ref nref;
++		{
++			BEntry entry;
++			int32 opcode;
++			const char *name = NULL;
++			entry_ref ref;
++			node_ref nref;
+ 
+-				if (message->FindInt32("opcode", &opcode) == B_OK)
++			if (message->FindInt32("opcode", &opcode) == B_OK)
++			{
++				switch (opcode)
+ 				{
+-					switch (opcode)
+-					{
+-						case B_ENTRY_CREATED:
+-							message->FindInt32("device", &ref.device);
+-							message->FindInt64("directory", &ref.directory);
+-							message->FindString("name", &name);
++					case B_ENTRY_CREATED:
++						if (message->FindRef("virtual:directory", &ref) == B_OK
++							&& message->FindString("name", &name) == B_OK)
++						{
+ 							ref.set_name(name);
+ 							entry.SetTo(&ref);
+ 							RescanCreated(&entry);
+-							break;
+-						case B_ENTRY_REMOVED:
+-							message->FindInt32("device", &nref.device);
+-							message->FindInt64("node", &nref.node);
++						}
++						break;
++
++					case B_ENTRY_REMOVED:
++						if (message->FindNodeRef("virtual:node", &nref) == B_OK)
+ 							RescanRemoved(nref);
+-							break;
+-						case B_ENTRY_MOVED:	// or renamed...
+-							message->FindInt32("device", &nref.device);
+-							message->FindInt64("node", &nref.node);
++					break;
++
++					case B_ENTRY_MOVED:	// or renamed...
++						if (message->FindNodeRef("virtual:node", &nref) == B_OK)
+ 							RescanRemoved(nref);
+ 
+-							message->FindInt32("device", &ref.device);
+-							message->FindInt64("to directory", &ref.directory);
+-							message->FindString("name", &name);
+-							ref.set_name(name);
+-							entry.SetTo(&ref);
+-							RescanCreated(&entry);
+-							break;
+-						case B_STAT_CHANGED:
+-							message->FindInt32("device", &nref.device);
+-							message->FindInt64("node", &nref.node);
++					if (message->FindRef("virtual:to directory", &ref) == B_OK
++						&& message->FindString("name", &name) == B_OK)
++					{
++						ref.set_name(name);
++						entry.SetTo(&ref);
++						RescanCreated(&entry);
++					}
++					break;
++
++					case B_STAT_CHANGED:
++						if (message->FindNodeRef("virtual:node", &nref) == B_OK)
+ 							RescanStat(nref);
+-							break;
+-						case B_ATTR_CHANGED:
+-							message->FindInt32("device", &nref.device);
+-							message->FindInt64("node", &nref.node);
++					break;
++
++					case B_ATTR_CHANGED:
++						if (message->FindNodeRef("virtual:node", &nref) == B_OK)
+ 							RescanAttr(nref);
+-							break;
+-						case B_DEVICE_MOUNTED:
+-							if (m_PanelMode==PM_DISKS)
+-								Reload();
+-							break;
+-						case B_DEVICE_UNMOUNTED:
+-							if (m_PanelMode==PM_DISKS)
+-								Reload();
+-							break;
+-					}
++					break;
++
++					case B_DEVICE_MOUNTED:
++						if (m_PanelMode==PM_DISKS)
++							Reload();
++					break;
++
++					case B_DEVICE_UNMOUNTED:
++						if (m_PanelMode==PM_DISKS)
++							Reload();
++					break;
+ 				}
+ 			}
+-			break;
++		}
++		break;
+ 		default:
+ 			BView::MessageReceived(message);
+ 	}
+@@ -592,19 +596,18 @@ void PanelView::RescanStat(node_ref nref)
+ 	CustomListItem *item = m_CustomListView->FindItemByNodeRef(nref);
+ 	if (item)
+ 	{
+-		struct stat statbuf;
++		struct statx stxbuf;
+ 		BString fullentryname(m_Path);
+ 		fullentryname << "/" << item->m_FileName;
+ 
+ 		BEntry entry(fullentryname.String());
+-		entry.GetStat(&statbuf);
+-
+-		item->m_FileSize = statbuf.st_size;
+-
+-		m_CustomListView->InvalidateItem(m_CustomListView->IndexOf(item));
+-
+-		m_CurrentTotalSize = m_CustomListView->GetCurrentTotalSize();
+-		SelectionChanged();
++		if (entry.GetStatX(&stxbuf) == B_OK)
++		{
++			item->m_FileSize = stxbuf.stx_size;
++			m_CustomListView->InvalidateItem(m_CustomListView->IndexOf(item));
++			m_CurrentTotalSize = m_CustomListView->GetCurrentTotalSize();
++			SelectionChanged();
++		}
+ 	}
+ }
+ 
+@@ -869,7 +872,7 @@ CustomListItem *PanelView::AddDirectoryEntry(BEntry *entry,  bool sorted)
+ 	{
+ 		BEntry symlinkentry;
+ 		entry_ref ref;
+-		struct stat statbuf;
++		struct statx stxbuf;
+ 
+ 		entry->GetRef(&ref);
+ 		if (symlinkentry.SetTo(&ref, true)==B_OK)
+@@ -889,8 +892,8 @@ CustomListItem *PanelView::AddDirectoryEntry(BEntry *entry,  bool sorted)
+ 			}
+ 			else
+ 			{
+-				symlinkentry.GetStat(&statbuf);
+-				item = new CustomListItem(name,m_Path.String(),FT_SYMLINKFILE,statbuf.st_size, this);
++				symlinkentry.GetStatX(&stxbuf);
++				item = new CustomListItem(name,m_Path.String(),FT_SYMLINKFILE,stxbuf.stx_size, this);
+ 				if (sorted)
+ 					m_CustomListView->AddSortedItem(item);
+ 				else
+@@ -919,10 +922,10 @@ CustomListItem *PanelView::AddDirectoryEntry(BEntry *entry,  bool sorted)
+ 	}
+ 	else
+ 	{
+-		struct stat statbuf;
+-		entry->GetStat(&statbuf);
++		struct statx stxbuf;
++		entry->GetStatX(&stxbuf);
+ 
+-		item = new CustomListItem(name,m_Path.String(),FT_FILE,statbuf.st_size, this);
++		item = new CustomListItem(name,m_Path.String(),FT_FILE,stxbuf.stx_size, this);
+ 		if (sorted)
+ 			m_CustomListView->AddSortedItem(item);
+ 		else
+diff --git a/src/Makefile b/src/Makefile
+index 6378903..8c18ad8 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -73,7 +73,7 @@ RSRCS =
+ #	- 	if your library does not follow the standard library naming scheme,
+ #		you need to specify the path to the library and it's name.
+ #		(e.g. for mylib.a, specify "mylib.a" or "path/mylib.a")
+-LIBS = be $(STDCPPLIBS)
++LIBS = root be $(STDCPPLIBS)
+ 
+ #	Specify additional paths to directories following the standard libXXX.so
+ #	or libXXX.a naming scheme. You can specify full paths or paths relative
