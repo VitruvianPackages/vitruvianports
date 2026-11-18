@@ -1,26 +1,13 @@
---- a/debian/control	2026-11-07 10:09:53.326402240 +0100
-+++ b/debian/control	2026-11-07 10:09:53.346402250 +0100
-@@ -76,8 +76,10 @@
-  libsdl2-compat (= ${binary:Version}),
-  ${misc:Depends},
- Conflicts:
-+ libsdl2,
-  libsdl2-2.0-0,
- Replaces:
-+ libsdl2,
-  libsdl2-2.0-0,
- Provides:
-  libsdl2-2.0-0 (= ${binary:Version}),
---- a/debian/rules	2026-11-07 10:09:53.326402240 +0100
-+++ b/debian/rules	2026-11-07 10:09:53.346402250 +0100
-@@ -50,6 +50,10 @@
- 	rm -fv debian/tmp/usr/share/installed-tests/SDL2_compat/testtimer.test
+--- a/debian/rules
++++ b/debian/rules
+@@ -39,6 +39,10 @@
  endif
+ 	dh_auto_configure -- $(configure_options)
  
 +# The tests need the V\OS kernel interface.
 +override_dh_auto_test:
 +	:
 +
- override_dh_strip:
- 	dh_strip -plibsdl2-compat-shim --no-automatic-dbgsym
- 	dh_strip --remaining-packages
+ # Only run testtimer as an autopkgtest on machines that we're reasonably
+ # sure are both fast and set up to be usable for interactive use
+ # (currently only x86 and 64-bit ARM).

@@ -48,13 +48,15 @@ diff -urN a/debian/control b/debian/control
 diff -urN a/debian/rules b/debian/rules
 --- a/debian/rules
 +++ b/debian/rules
-@@ -114,7 +114,11 @@
+@@ -114,7 +114,13 @@
  
  override_dh_install:
  	dh_install -pxserver-xorg-core-udeb --sourcedir=debian/tmp/udeb
 +	# Xvitr is a background app: hidden from the Deskbar
 +	/usr/lib/vos/buildtools/rc debian/xvitr.rdef -o debian/xvitr.rsrc
 +	/usr/lib/vos/buildtools/xres -o debian/tmp/main/usr/bin/Xvitr debian/xvitr.rsrc
++	install -d debian/tmp/main/usr/lib/systemd/user
++	install -m 644 debian/xvitruvian.socket debian/xvitruvian.service debian/tmp/main/usr/lib/systemd/user
  	dh_install --remaining-packages --sourcedir=debian/tmp/main
 +	dh_vosattrs -pxserver-xvitruvian
  	install -d $(CURDIR)/debian/xserver-xorg-dev/usr/share/xserver-xorg
@@ -102,8 +104,8 @@ diff -urN a/debian/xvitruvian-launcher.install b/debian/xvitruvian-launcher.inst
 --- a/debian/xvitruvian-launcher.install
 +++ b/debian/xvitruvian-launcher.install
 @@ -0,0 +1,2 @@
-+debian/xvitruvian.socket usr/lib/systemd/user
-+debian/xvitruvian.service usr/lib/systemd/user
++usr/lib/systemd/user/xvitruvian.socket
++usr/lib/systemd/user/xvitruvian.service
 diff -urN a/debian/xvitruvian-launcher.links b/debian/xvitruvian-launcher.links
 --- a/debian/xvitruvian-launcher.links
 +++ b/debian/xvitruvian-launcher.links
