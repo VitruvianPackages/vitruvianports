@@ -1,0 +1,27 @@
+Description: Qt 6.9 and later declare QPlatformFontDatabase::fallbacksForFamily() with QFontDatabasePrivate::ExtendedScript instead of QChar::Script; match it so the override is accepted.
+Author: Numerio <b.vitruvio@gmail.com>
+Origin: vendor
+Forwarded: not-needed
+---
+--- a/src/platform/qhaikuplatformfontdatabase.h
++++ b/src/platform/qhaikuplatformfontdatabase.h
+@@ -64,7 +64,7 @@
+ 	QStringList fallbacksForFamily(const QString &family,
+ 									QFont::Style style,
+ 									QFont::StyleHint styleHint,
+-									QChar::Script script) const override;
++									QFontDatabasePrivate::ExtendedScript script) const override;
+ 	QFontEngine *fontEngine(const QFontDef &fontDef, void *handle) override;
+ 	void releaseHandle(void *handle) override;
+ private:
+--- a/src/platform/qhaikuplatformfontdatabase.cpp
++++ b/src/platform/qhaikuplatformfontdatabase.cpp
+@@ -133,7 +133,7 @@
+ QStringList	QHaikuPlatformFontDatabase::fallbacksForFamily(const QString &family,
+ 															QFont::Style style,
+ 															QFont::StyleHint styleHint,
+-															QChar::Script script) const
++															QFontDatabasePrivate::ExtendedScript script) const
+ {
+ 	QStringList result;
+ 	if (styleHint == QFont::Monospace || styleHint	== QFont::Courier) {
