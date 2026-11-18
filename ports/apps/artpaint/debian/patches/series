@@ -1,1 +1,2 @@
 0001-link-libm.patch
+0002-do-not-build-with-werror.patch

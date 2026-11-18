@@ -1,0 +1,20 @@
+From: Numerio <b.vitruvio@gmail.com>
+Subject: do not treat warnings as errors
+Forwarded: not-needed
+Description:
+ The current Debian compiler reports new warnings on the legacy sources
+ (e.g. "variable 'angle_sum' set but not used" in HSPolygon.cpp), and
+ -Werror turns each of them into a build failure.
+Author: Numerio <b.vitruvio@gmail.com>
+
+--- a/Makefile
++++ b/Makefile
+@@ -156,7 +156,7 @@
+ DEBUGGER =
+ 
+ #	specify additional compiler flags for all files
+-COMPILER_FLAGS = -Werror
++COMPILER_FLAGS =
+ 
+ #	specify additional linker flags
+ LINKER_FLAGS =
