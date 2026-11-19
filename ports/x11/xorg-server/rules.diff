@@ -111,6 +111,30 @@ diff -urN a/debian/xvitruvian-launcher.links b/debian/xvitruvian-launcher.links
 +++ b/debian/xvitruvian-launcher.links
 @@ -0,0 +1 @@
 +usr/lib/systemd/user/xvitruvian.socket usr/lib/systemd/user/sockets.target.wants/xvitruvian.socket
+diff -urN a/debian/xvitruvian-launcher.postinst b/debian/xvitruvian-launcher.postinst
+--- a/debian/xvitruvian-launcher.postinst
++++ b/debian/xvitruvian-launcher.postinst
+@@ -0,0 +1,20 @@
++#!/bin/sh
++set -e
++
++#DEBHELPER#
++
++case "$1" in
++configure)
++	# The sockets.target.wants link only takes effect at the next login: start the
++	# socket for sessions that are already running, so a freshly installed X app
++	# can connect right away. Best effort, there may be no user manager (chroot, image build).
++	if [ -d /run/systemd/system ] && command -v loginctl >/dev/null 2>&1; then
++		for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
++			systemctl --user -M "$uid@" daemon-reload >/dev/null 2>&1 || true
++			systemctl --user -M "$uid@" start xvitruvian.socket >/dev/null 2>&1 || true
++		done
++	fi
++	;;
++esac
++
++exit 0
 diff -urN a/debian/xvitruvian.service b/debian/xvitruvian.service
 --- a/debian/xvitruvian.service
 +++ b/debian/xvitruvian.service

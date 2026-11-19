@@ -11,3 +11,16 @@
  # Only run testtimer as an autopkgtest on machines that we're reasonably
  # sure are both fast and set up to be usable for interactive use
  # (currently only x86 and 64-bit ARM).
+--- a/debian/control
++++ b/debian/control
+@@ -24,6 +24,10 @@
+ Package: libsdl2-2.0-0
+ Architecture: any
+ Multi-Arch: same
++Depends:
++ ${misc:Depends},
++ ${shlibs:Depends},
++ libsdl3-0 (>= 3.4.20+ds-1vos1),
+ Conflicts:
+  libsdl-1.3-0,
+ Replaces:
