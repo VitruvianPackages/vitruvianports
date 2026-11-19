@@ -6,7 +6,7 @@ diff --git a/hw/vitruvian/vInit.cpp b/hw/vitruvian/vInit.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInit.cpp
-@@ -0,0 +1,897 @@
+@@ -0,0 +1,907 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -759,6 +759,16 @@ new file mode 100644
 +}
 +
 +
++// RRGetInfo calls the hook unconditionally; there is one fixed output, nothing to
++// poll, and the rotation never changes.
++static Bool
++vRandRGetInfo(ScreenPtr pScreen, Rotation* rotations)
++{
++	*rotations = RR_Rotate_0;
++	return TRUE;
++}
++
++
 +static Bool
 +vRandRInit(ScreenPtr pScreen)
 +{
@@ -773,7 +783,7 @@ new file mode 100644
 +		return FALSE;
 +
 +	pScrPriv = rrGetScrPriv(pScreen);
-+	pScrPriv->rrGetInfo = NULL;
++	pScrPriv->rrGetInfo = vRandRGetInfo;
 +	pScrPriv->rrCrtcSet = NULL;
 +	pScrPriv->rrScreenSetSize = NULL;
 +	pScrPriv->rrOutputValidateMode = NULL;
