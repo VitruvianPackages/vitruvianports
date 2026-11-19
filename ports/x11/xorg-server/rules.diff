@@ -135,6 +135,28 @@ diff -urN a/debian/xvitruvian-launcher.postinst b/debian/xvitruvian-launcher.pos
 +esac
 +
 +exit 0
+diff -urN a/debian/xvitruvian-launcher.prerm b/debian/xvitruvian-launcher.prerm
+--- a/debian/xvitruvian-launcher.prerm
++++ b/debian/xvitruvian-launcher.prerm
+@@ -0,0 +1,18 @@
++#!/bin/sh
++set -e
++
++#DEBHELPER#
++
++case "$1" in
++remove|deconfigure)
++	# Stop the socket and the X server it started in the running sessions, so
++	# they do not outlive the package. Best effort, there may be no user manager.
++	if [ -d /run/systemd/system ] && command -v loginctl >/dev/null 2>&1; then
++		for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
++			systemctl --user -M "$uid@" stop xvitruvian.socket xvitruvian.service >/dev/null 2>&1 || true
++		done
++	fi
++	;;
++esac
++
++exit 0
 diff -urN a/debian/xvitruvian.service b/debian/xvitruvian.service
 --- a/debian/xvitruvian.service
 +++ b/debian/xvitruvian.service
@@ -151,13 +173,14 @@ diff -urN a/debian/xvitruvian.service b/debian/xvitruvian.service
 diff -urN a/debian/xvitruvian.socket b/debian/xvitruvian.socket
 --- a/debian/xvitruvian.socket
 +++ b/debian/xvitruvian.socket
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,10 @@
 +[Unit]
 +Description=X display :0 (Xvitr, started on demand)
 +
 +[Socket]
 +ListenStream=/tmp/.X11-unix/X0
 +SocketMode=0600
++RemoveOnStop=yes
 +
 +[Install]
 +WantedBy=sockets.target
