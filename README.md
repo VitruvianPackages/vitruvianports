@@ -32,7 +32,7 @@ vitruvianporter build --all --out out/
 
 Run from the root of this repository, or pass `-C <path>` or set
 `$VITRUVIANPORTS`. `--suite` (`testing-nightly`, `testing`,
-`trixie-nightly`, `trixie`) and `--arch` pick the build root.
+`stable-nightly`, `trixie`) and `--arch` pick the build root.
 
 ## Adding a port
 
