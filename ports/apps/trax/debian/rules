@@ -7,7 +7,7 @@
 SPEC_INCLUDES := $(shell grep -oE '^-I.*' /etc/vos.specs | sed 's/^-I/-isystem /' | tr '\n' ' ' | sed 's/ *$$//')
 
 TRAX_CFLAGS := -O2 -Wall -Wno-multichar -Wno-ctor-dtor-privacy \
-	-std=gnu17 -D_DEFAULT_SOURCE -D_GNU_SOURCE -DSTDC_HEADERS -D__HAIKU__ -fPIC \
+	-std=gnu17 -D_DEFAULT_SOURCE -D_GNU_SOURCE -DSTDC_HEADERS -DHAVE_MEMCHR -D__HAIKU__ -fPIC \
 	-Wno-error=implicit-int -Wno-error=incompatible-pointer-types \
 	-include LinuxBuildCompatibility.h $(SPEC_INCLUDES)
 TRAX_LDFLAGS := -Wl,--no-as-needed -lstdc++ -lroot -lm -ltracker
