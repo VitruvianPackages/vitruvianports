@@ -36,9 +36,9 @@ diff -urN a/debian/control b/debian/control
 + xserver-xvitruvian (>= ${source:Version}),
 + ${misc:Depends},
 +Description: on-demand X server for V\OS sessions
-+ Starts the Xvitr X server for display :0 when the first X11 program
-+ connects and stops it again once the last one has gone. Nothing runs
-+ until then.
++ Pulls in the Xvitr X server. The V\OS session starts it when the first
++ X11 program connects and stops it with the session. Nothing runs until
++ then.
 + .
 + This package is built from the X.org xserver module.
 +
@@ -48,21 +48,19 @@ diff -urN a/debian/control b/debian/control
 diff -urN a/debian/rules b/debian/rules
 --- a/debian/rules
 +++ b/debian/rules
-@@ -114,7 +114,13 @@
+@@ -114,7 +114,11 @@
  
  override_dh_install:
  	dh_install -pxserver-xorg-core-udeb --sourcedir=debian/tmp/udeb
 +	# Xvitr is a background app: hidden from the Deskbar
 +	/usr/lib/vos/buildtools/rc debian/xvitr.rdef -o debian/xvitr.rsrc
 +	/usr/lib/vos/buildtools/xres -o debian/tmp/main/usr/bin/Xvitr debian/xvitr.rsrc
-+	install -d debian/tmp/main/usr/lib/systemd/user
-+	install -m 644 debian/xvitruvian.socket debian/xvitruvian.service debian/tmp/main/usr/lib/systemd/user
  	dh_install --remaining-packages --sourcedir=debian/tmp/main
 +	dh_vosattrs -pxserver-xvitruvian
  	install -d $(CURDIR)/debian/xserver-xorg-dev/usr/share/xserver-xorg
  	# Extract only the major ABI version:
  	set -e; \
-@@ -143,6 +147,13 @@
+@@ -143,6 +145,13 @@
  	install -m 644 debian/local/64-xorg-xkb.rules debian/xserver-xorg-core-udeb$(deb_udevdir)/rules.d
  endif
  
@@ -100,87 +98,3 @@ diff -urN a/debian/xvitr.rdef b/debian/xvitr.rdef
 +resource app_signature "application/x-vnd.v-os-xvitruvian";
 +
 +resource app_flags B_MULTIPLE_LAUNCH | B_BACKGROUND_APP;
-diff -urN a/debian/xvitruvian-launcher.install b/debian/xvitruvian-launcher.install
---- a/debian/xvitruvian-launcher.install
-+++ b/debian/xvitruvian-launcher.install
-@@ -0,0 +1,2 @@
-+usr/lib/systemd/user/xvitruvian.socket
-+usr/lib/systemd/user/xvitruvian.service
-diff -urN a/debian/xvitruvian-launcher.links b/debian/xvitruvian-launcher.links
---- a/debian/xvitruvian-launcher.links
-+++ b/debian/xvitruvian-launcher.links
-@@ -0,0 +1 @@
-+usr/lib/systemd/user/xvitruvian.socket usr/lib/systemd/user/sockets.target.wants/xvitruvian.socket
-diff -urN a/debian/xvitruvian-launcher.postinst b/debian/xvitruvian-launcher.postinst
---- a/debian/xvitruvian-launcher.postinst
-+++ b/debian/xvitruvian-launcher.postinst
-@@ -0,0 +1,20 @@
-+#!/bin/sh
-+set -e
-+
-+#DEBHELPER#
-+
-+case "$1" in
-+configure)
-+	# The sockets.target.wants link only takes effect at the next login: start the
-+	# socket for sessions that are already running, so a freshly installed X app
-+	# can connect right away. Best effort, there may be no user manager (chroot, image build).
-+	if [ -d /run/systemd/system ] && command -v loginctl >/dev/null 2>&1; then
-+		for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
-+			systemctl --user -M "$uid@" daemon-reload >/dev/null 2>&1 || true
-+			systemctl --user -M "$uid@" start xvitruvian.socket >/dev/null 2>&1 || true
-+		done
-+	fi
-+	;;
-+esac
-+
-+exit 0
-diff -urN a/debian/xvitruvian-launcher.prerm b/debian/xvitruvian-launcher.prerm
---- a/debian/xvitruvian-launcher.prerm
-+++ b/debian/xvitruvian-launcher.prerm
-@@ -0,0 +1,18 @@
-+#!/bin/sh
-+set -e
-+
-+#DEBHELPER#
-+
-+case "$1" in
-+remove|deconfigure)
-+	# Stop the socket and the X server it started in the running sessions, so
-+	# they do not outlive the package. Best effort, there may be no user manager.
-+	if [ -d /run/systemd/system ] && command -v loginctl >/dev/null 2>&1; then
-+		for uid in $(loginctl list-users --no-legend 2>/dev/null | awk '{print $1}'); do
-+			systemctl --user -M "$uid@" stop xvitruvian.socket xvitruvian.service >/dev/null 2>&1 || true
-+		done
-+	fi
-+	;;
-+esac
-+
-+exit 0
-diff -urN a/debian/xvitruvian.service b/debian/xvitruvian.service
---- a/debian/xvitruvian.service
-+++ b/debian/xvitruvian.service
-@@ -0,0 +1,9 @@
-+[Unit]
-+Description=Xvitr X server for display :0
-+Requires=xvitruvian.socket
-+After=xvitruvian.socket
-+
-+[Service]
-+# Exits on its own after a minute with no clients; the socket restarts it.
-+ExecStart=/usr/bin/Xvitr :0 -listenfd 3 -nolisten tcp -noreset
-+Restart=no
-diff -urN a/debian/xvitruvian.socket b/debian/xvitruvian.socket
---- a/debian/xvitruvian.socket
-+++ b/debian/xvitruvian.socket
-@@ -0,0 +1,10 @@
-+[Unit]
-+Description=X display :0 (Xvitr, started on demand)
-+
-+[Socket]
-+ListenStream=/tmp/.X11-unix/X0
-+SocketMode=0600
-+RemoveOnStop=yes
-+
-+[Install]
-+WantedBy=sockets.target
