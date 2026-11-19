@@ -1,4 +1,4 @@
-libxcb (1.17.0-2vos1) unstable; urgency=medium
+libxcb (1.17.0-2+vos1) unstable; urgency=medium
 
   * Register X clients with the V\OS roster.
 
