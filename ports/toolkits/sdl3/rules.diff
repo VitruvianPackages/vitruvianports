@@ -8,26 +8,21 @@
  Build-Depends-Indep:
   doxygen <!nodoc>,
   graphviz <!nodoc>,
-@@ -62,6 +63,10 @@
- Package: libsdl3-0
- Architecture: any
- Multi-Arch: same
-+Depends:
-+ ${misc:Depends},
-+ ${shlibs:Depends},
-+ vos,
- Recommends:
-  libegl1,
-  libgl1 | libopengl0,
 --- a/debian/rules
 +++ b/debian/rules
-@@ -97,6 +97,10 @@
+@@ -97,6 +97,16 @@
  	sed -i -e 's/^const uint32_t/static &/' src/render/vulkan/VULKAN_*.h
  	dh_auto_configure -- $(confflags)
  
 +# The tests link libbe, which needs the V\OS kernel interface.
 +override_dh_auto_test:
 +	:
++
++# libsdl3-0 depends on the V\OS runtime; the Depends field differs between
++# Debian releases, so edit the stanza instead of patching it.
++override_dh_gencontrol:
++	perl -0pi -e 's{(^Package: libsdl3-0\n.*?)(?=\n\n)}{ my $$s = $$1; $$s =~ s/^Depends:\n/Depends:\n vos,\n/m or $$s =~ s/^Recommends:/Depends:\n \$${misc:Depends},\n \$${shlibs:Depends},\n vos,\nRecommends:/m; $$s }mse' debian/control
++	dh_gencontrol
 +
  execute_after_dh_auto_build:
  ifneq ($(filter %-doc,$(built_binaries)),)
