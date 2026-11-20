@@ -432,7 +432,7 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,964 @@
+@@ -0,0 +1,987 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -551,6 +551,8 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +        window->min_h > 0 ? window->min_h - 1 : 0, window->max_h > 0 ? window->max_h - 1 : 32768);
 +}
 +
++static void ApplyCurrentCursor(SDL_WindowData *data);
++
 +static bool VOS_CreateWindow(SDL_VideoDevice *_this, SDL_Window *window, SDL_PropertiesID create_props)
 +{
 +    SDL_WindowData *data = new (std::nothrow) SDL_WindowData();
@@ -582,6 +584,7 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    data->fd = port_to_fd(data->surface->EventPort());
 +    window->internal = data;
 +    ApplyLimits(window);
++    ApplyCurrentCursor(data);
 +    return true;
 +}
 +
@@ -1168,13 +1171,11 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +}
 +
 +// Per surface, so app_server restores its own cursor outside the window.
-+static bool VOS_ShowCursor(SDL_Cursor *cursor)
++// Applied to every window: the view cursor lives in app_server and does not
++// depend on which window SDL considers focused.
++static void ApplyCursor(SDL_WindowData *data, SDL_Cursor *cursor)
 +{
 +    static BCursor *hidden = NULL;
-+    SDL_Window *focus = SDL_GetMouseFocus();
-+    if (!focus || !focus->internal) {
-+        return true;
-+    }
 +    const BCursor *shown;
 +    if (cursor) {
 +        shown = (BCursor *)cursor->internal;
@@ -1184,7 +1185,28 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +        }
 +        shown = hidden;
 +    }
-+    focus->internal->surface->SetCursor(shown);
++    if (shown) {
++        data->surface->SetCursor(shown);
++    }
++}
++
++static void ApplyCurrentCursor(SDL_WindowData *data)
++{
++    SDL_Mouse *mouse = SDL_GetMouse();
++    if (mouse && mouse->cur_cursor) {
++        bool visible = mouse->cursor_visible && !mouse->relative_mode;
++        ApplyCursor(data, visible ? mouse->cur_cursor : NULL);
++    }
++}
++
++static bool VOS_ShowCursor(SDL_Cursor *cursor)
++{
++    SDL_VideoDevice *_this = SDL_GetVideoDevice();
++    for (SDL_Window *w = _this ? _this->windows : NULL; w; w = w->next) {
++        if (w->internal) {
++            ApplyCursor(w->internal, cursor);
++        }
++    }
 +    return true;
 +}
 +
@@ -1294,6 +1316,7 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +        mouse->CreateSystemCursor = VOS_CreateSystemCursor;
 +        mouse->ShowCursor = VOS_ShowCursor;
 +        mouse->FreeCursor = VOS_FreeCursor;
++        SDL_SetDefaultCursor(VOS_CreateSystemCursor(SDL_SYSTEM_CURSOR_DEFAULT));
 +    }
 +#if SDL_VERSION_ATLEAST(3, 4, 0)
 +    SDL_AddKeyboard(SDL_DEFAULT_KEYBOARD_ID, NULL);
