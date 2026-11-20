@@ -2049,7 +2049,7 @@ diff --git a/hw/vitruvian/vSettings.cpp b/hw/vitruvian/vSettings.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vSettings.cpp
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,386 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2070,12 +2070,18 @@ new file mode 100644
 +#include <InterfaceDefs.h>
 +#include <String.h>
 +
++#include <errno.h>
 +#include <stdio.h>
++#include <stdlib.h>
 +#include <string.h>
++#include <sys/stat.h>
++#include <unistd.h>
 +
 +
 +
 +void _init_global_fonts_();
++status_t get_subpixel_antialiasing(bool* subpix);
++status_t get_hinting_mode(uint8* hinting);
 +
 +static const int kDpi = 96;
 +static const int kCursorSize = 24;
@@ -2143,9 +2149,92 @@ new file mode 100644
 +}
 +
 +
++struct VLook {
++	BString	font;
++	bool	dark;
++	bool	antialias;
++	bool	subpixel;
++	uint8	hinting;
++	BString	plainFamily;
++	BString	boldFamily;
++	BString	fixedFamily;
++};
++
 +static BLocker sCacheLock("xv settings");
-+static BString sCachedFont("Sans 10");
-+static bool sCachedDark = false;
++static VLook sCached = { BString("Sans 10"), false, true, false, 1 };
++
++
++// The fontconfig aliases and rendering defaults X clients read; rewritten
++// only when the text changes.
++static void
++vWriteFontconfig(const VLook& look)
++{
++	const char* config = getenv("XDG_CONFIG_HOME");
++	const char* home = getenv("HOME");
++	BString dir;
++	if (config != NULL && config[0] != '\0')
++		dir = config;
++	else if (home != NULL && home[0] != '\0')
++		dir << home << "/.config";
++	else
++		return;
++	dir << "/fontconfig";
++	mkdir(dir.String(), 0755);
++	dir << "/conf.d";
++	mkdir(dir.String(), 0755);
++
++	const char* hintStyle = look.hinting == 0 ? "hintnone" : "hintslight";
++	BString text;
++	text << "<?xml version=\"1.0\"?>\n"
++		"<!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\">\n"
++		"<!-- Generated from the V\\OS font settings. -->\n"
++		"<fontconfig>\n";
++	const char* const kGeneric[3] = { "sans-serif", "serif", "monospace" };
++	const BString* families[3] = { &look.plainFamily, &look.boldFamily,
++		&look.fixedFamily };
++	for (int i = 0; i < 3; i++) {
++		if (families[i]->IsEmpty())
++			continue;
++		text << "\t<alias binding=\"same\">\n\t\t<family>" << kGeneric[i]
++			<< "</family>\n\t\t<prefer><family>" << *families[i]
++			<< "</family></prefer>\n\t</alias>\n";
++	}
++	text << "\t<match target=\"font\">\n"
++		"\t\t<edit name=\"antialias\" mode=\"assign\"><bool>"
++		<< (look.antialias ? "true" : "false") << "</bool></edit>\n"
++		"\t\t<edit name=\"hinting\" mode=\"assign\"><bool>"
++		<< (look.hinting != 0 ? "true" : "false") << "</bool></edit>\n"
++		"\t\t<edit name=\"hintstyle\" mode=\"assign\"><const>"
++		<< hintStyle << "</const></edit>\n"
++		"\t\t<edit name=\"rgba\" mode=\"assign\"><const>"
++		<< (look.subpixel ? "rgb" : "none") << "</const></edit>\n"
++		"\t</match>\n</fontconfig>\n";
++
++	BString path(dir);
++	path << "/60-vos.conf";
++	FILE* file = fopen(path.String(), "r");
++	if (file != NULL) {
++		BString old;
++		char buffer[1024];
++		size_t count;
++		while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
++			old.Append(buffer, count);
++		fclose(file);
++		if (old == text)
++			return;
++	}
++
++	BString temp(path);
++	temp << ".tmp";
++	file = fopen(temp.String(), "w");
++	if (file == NULL)
++		return;
++	bool ok = fwrite(text.String(), 1, text.Length(), file)
++		== (size_t)text.Length();
++	ok = fclose(file) == 0 && ok;
++	if (!ok || rename(temp.String(), path.String()) != 0)
++		unlink(temp.String());
++}
 +
 +
 +// Runs on the application thread: font and color queries talk to
@@ -2160,45 +2249,70 @@ new file mode 100644
 +	be_plain_font->GetFamilyAndStyle(&family, &style);
 +	BString font;
 +	font.SetToFormat("%s %d", family, (int)(be_plain_font->Size() + 0.5f));
++	VLook look;
++	look.font = font;
++	look.plainFamily = family;
++	font_family boldFamily;
++	be_bold_font->GetFamilyAndStyle(&boldFamily, &style);
++	look.boldFamily = boldFamily;
++	font_family fixedFamily;
++	be_fixed_font->GetFamilyAndStyle(&fixedFamily, &style);
++	look.fixedFamily = fixedFamily;
++	look.antialias = (be_plain_font->Flags() & B_DISABLE_ANTIALIASING) == 0;
++	look.subpixel = false;
++	get_subpixel_antialiasing(&look.subpixel);
++	look.hinting = 1;
++	get_hinting_mode(&look.hinting);
 +
 +	rgb_color background = ui_color(B_PANEL_BACKGROUND_COLOR);
 +	bool dark = (background.red * 299 + background.green * 587
 +		+ background.blue * 114) / 1000 < 128;
 +
++	look.dark = dark;
++
++	vWriteFontconfig(look);
++
 +	BAutolock locker(sCacheLock);
-+	sCachedFont = font;
-+	sCachedDark = dark;
++	sCached = look;
 +}
 +
 +
 +static void
-+vReadSettings(BString& font, bool& dark)
++vReadSettings(VLook& look)
 +{
 +	BAutolock locker(sCacheLock);
-+	font = sCachedFont;
-+	dark = sCachedDark;
++	look = sCached;
 +}
 +
 +
 +static void
-+vPublishXSettings(const BString& font, bool dark)
++vPublishXSettings(const VLook& look)
 +{
++	const BString& font = look.font;
++	bool dark = look.dark;
 +	std::vector<uint8> data;
 +	data.push_back(0);	// LSBFirst
 +	data.push_back(0);
 +	data.push_back(0);
 +	data.push_back(0);
 +	vPut32(data, sSerial);
-+	vPut32(data, 9);
++	vPut32(data, 15);
 +
 +	vPutInt(data, "Xft/DPI", kDpi * 1024);
-+	vPutInt(data, "Xft/Antialias", 1);
-+	vPutInt(data, "Xft/Hinting", 1);
-+	vPutString(data, "Xft/HintStyle", "hintslight");
-+	vPutString(data, "Xft/RGBA", "none");
++	vPutInt(data, "Xft/Antialias", look.antialias ? 1 : 0);
++	vPutInt(data, "Xft/Hinting", look.hinting != 0 ? 1 : 0);
++	vPutString(data, "Xft/HintStyle",
++		look.hinting != 0 ? "hintslight" : "hintnone");
++	vPutString(data, "Xft/RGBA", look.subpixel ? "rgb" : "none");
 +	vPutString(data, "Gtk/FontName", font.String());
 +	vPutString(data, "Net/ThemeName", dark ? "Adwaita-dark" : "Adwaita");
++	vPutString(data, "Net/IconThemeName", "Adwaita");
++	vPutString(data, "Gtk/CursorThemeName", "Adwaita");
 +	vPutInt(data, "Gtk/CursorThemeSize", kCursorSize);
++	vPutInt(data, "Gtk/MenuImages", 1);
++	vPutInt(data, "Gtk/ButtonImages", 1);
++	vPutInt(data, "Gtk/EnableAnimations", 1);
++	vPutInt(data, "Gtk/ApplicationPreferDarkTheme", dark ? 1 : 0);
 +	vPutString(data, "Gtk/DecorationLayout", ":minimize,maximize,close");
 +
 +	Atom property = vSettingAtom("_XSETTINGS_SETTINGS");
@@ -2211,11 +2325,11 @@ new file mode 100644
 +
 +
 +static void
-+vPublishResources(WindowPtr root)
++vPublishResources(WindowPtr root, const VLook& look)
 +{
 +	static const char* const kKeys[] = {
 +		"Xft.dpi:", "Xft.antialias:", "Xft.hinting:", "Xft.hintstyle:",
-+		"Xft.rgba:", "Xcursor.size:"
++		"Xft.rgba:", "Xcursor.size:", "Xcursor.theme:"
 +	};
 +
 +	// Merge like xrdb: keep every entry that is not ours.
@@ -2245,11 +2359,13 @@ new file mode 100644
 +	}
 +
 +	result << "Xft.dpi:\t" << (int32)kDpi << "\n"
-+		<< "Xft.antialias:\t1\n"
-+		<< "Xft.hinting:\t1\n"
-+		<< "Xft.hintstyle:\thintslight\n"
-+		<< "Xft.rgba:\tnone\n"
-+		<< "Xcursor.size:\t" << (int32)kCursorSize << "\n";
++		<< "Xft.antialias:\t" << (look.antialias ? "1" : "0") << "\n"
++		<< "Xft.hinting:\t" << (look.hinting != 0 ? "1" : "0") << "\n"
++		<< "Xft.hintstyle:\t"
++		<< (look.hinting != 0 ? "hintslight" : "hintnone") << "\n"
++		<< "Xft.rgba:\t" << (look.subpixel ? "rgb" : "none") << "\n"
++		<< "Xcursor.size:\t" << (int32)kCursorSize << "\n"
++		<< "Xcursor.theme:\tAdwaita\n";
 +
 +	dixChangeWindowProperty(serverClient, root, XA_RESOURCE_MANAGER,
 +		XA_STRING, 8, PropModeReplace, result.Length(),
@@ -2268,9 +2384,8 @@ new file mode 100644
 +		return;
 +
 +	WindowPtr root = gVScreen->root;
-+	BString font;
-+	bool dark;
-+	vReadSettings(font, dark);
++	VLook look;
++	vReadSettings(look);
 +
 +	if (sOwner == NULL) {
 +		int error = 0;
@@ -2285,8 +2400,8 @@ new file mode 100644
 +	}
 +
 +	sSerial++;
-+	vPublishXSettings(font, dark);
-+	vPublishResources(root);
++	vPublishXSettings(look);
++	vPublishResources(root, look);
 +
 +	Atom selection = vSettingAtom("_XSETTINGS_S0");
 +	Selection* pSel = NULL;
