@@ -1816,7 +1816,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,227 @@
+@@ -0,0 +1,228 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1950,6 +1950,7 @@ new file mode 100644
 +	int32		feel;
 +	uint32		flags;
 +	int32		extents[4];
++	int32		csd[4];
 +	float		limits[4];
 +	int			dragMode;
 +	float		dragX;
@@ -2324,7 +2325,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1367 @@
+@@ -0,0 +1,1495 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2347,6 +2348,7 @@ new file mode 100644
 +#include <Bitmap.h>
 +#include <Message.h>
 +#include <Point.h>
++#include <Deskbar.h>
 +#include <Rect.h>
 +#include <Screen.h>
 +#include <String.h>
@@ -2533,6 +2535,110 @@ new file mode 100644
 +
 +
 +static void vChangeNetStates(WindowPtr pWin, int action, Atom a, Atom b);
++static int vReadCards(WindowPtr pWin, Atom property, CARD32* out,
++	int maxItems);
++
++
++// Shadow margins a client-decorated window reserves around its content
++// (_GTK_FRAME_EXTENTS: left, right, top, bottom). Only the inset part
++// is shown on the surface; a fullscreen window keeps all of it.
++static void
++vReadCsdExtents(WindowPtr pWin, int32* out)
++{
++	out[0] = out[1] = out[2] = out[3] = 0;
++	CARD32 cards[4];
++	if (vReadCards(pWin, vAtom("_GTK_FRAME_EXTENTS"), cards, 4) < 4)
++		return;
++	if (vWindowHasAtom(pWin, vAtom("_NET_WM_STATE"),
++			vAtom("_NET_WM_STATE_FULLSCREEN")))
++		return;
++	int32 values[4];
++	for (int i = 0; i < 4; i++)
++		values[i] = vMinI((int32)cards[i], 1024);
++	if (values[0] + values[1] >= (int32)pWin->drawable.width
++		|| values[2] + values[3] >= (int32)pWin->drawable.height)
++		return;
++	memcpy(out, values, sizeof(values));
++}
++
++
++// The screen without the Deskbar.
++static BRect
++vWorkArea()
++{
++	BRect area = BScreen().Frame();
++	BDeskbar deskbar;
++	if (!deskbar.IsRunning())
++		return area;
++	BRect bar = deskbar.Frame();
++	if (!bar.IsValid() || bar.Width() < 1 || bar.Height() < 1)
++		return area;
++	if (bar.Width() >= area.Width() * 0.5f) {
++		if (bar.top <= area.top + 1)
++			area.top = vMaxI((int32)area.top, (int32)bar.bottom + 1);
++		else
++			area.bottom = vMinI((int32)area.bottom, (int32)bar.top - 1);
++	} else {
++		if (bar.left <= area.left + 1)
++			area.left = vMaxI((int32)area.left, (int32)bar.right + 1);
++		else
++			area.right = vMinI((int32)area.right, (int32)bar.left - 1);
++	}
++	return area;
++}
++
++
++// Keeps a new window's tab and border inside the work area, shrinking it
++// when it cannot fit.
++static void
++vClampToWorkArea(VWindowPriv* priv)
++{
++	BRect area = vWorkArea();
++	BRect frame = priv->surface->Frame();
++	float maxWidth = area.Width() - priv->extents[0] - priv->extents[1];
++	float maxHeight = area.Height() - priv->extents[2] - priv->extents[3];
++	if (frame.Width() > maxWidth || frame.Height() > maxHeight) {
++		priv->surface->ResizeTo(frame.Width() > maxWidth
++			? maxWidth : frame.Width(), frame.Height() > maxHeight
++			? maxHeight : frame.Height());
++		frame = priv->surface->Frame();
++	}
++
++	float left = frame.left;
++	float top = frame.top;
++	float minLeft = area.left + priv->extents[0];
++	float minTop = area.top + priv->extents[2];
++	float maxLeft = area.right - priv->extents[1] - frame.Width();
++	float maxTop = area.bottom - priv->extents[3] - frame.Height();
++	if (left > maxLeft)
++		left = maxLeft;
++	if (top > maxTop)
++		top = maxTop;
++	if (left < minLeft)
++		left = minLeft;
++	if (top < minTop)
++		top = minTop;
++	if (left != frame.left || top != frame.top)
++		priv->surface->MoveTo(BPoint(left, top));
++}
++
++
++// Puts the surface on the X window's content, less the shadow margins.
++static void
++vPlaceSurface(VWindowPriv* priv, WindowPtr pWin)
++{
++	BRect frame = priv->surface->Frame();
++	float width = (float)((int32)pWin->drawable.width - priv->csd[0]
++		- priv->csd[1]) - 1;
++	float height = (float)((int32)pWin->drawable.height - priv->csd[2]
++		- priv->csd[3]) - 1;
++	BPoint where(pWin->drawable.x + priv->csd[0],
++		pWin->drawable.y + priv->csd[2]);
++	if (frame.LeftTop() != where)
++		priv->surface->MoveTo(where);
++	if (frame.Width() != width || frame.Height() != height)
++		priv->surface->ResizeTo(width, height);
++}
 +
 +
 +
@@ -2635,8 +2741,8 @@ new file mode 100644
 +				if (pWin != NULL && event.FindPoint("where", &where) == B_OK) {
 +					// The native frame is the X content origin.
 +					int bw = wBorderWidth(pWin);
-+					XID values[2] = { (XID)((int32)where.x - bw),
-+						(XID)((int32)where.y - bw) };
++					XID values[2] = { (XID)((int32)where.x - bw - priv->csd[0]),
++						(XID)((int32)where.y - bw - priv->csd[2]) };
 +					ConfigureWindow(pWin, CWX | CWY, values, wClient(pWin));
 +				}
 +				break;
@@ -2647,6 +2753,8 @@ new file mode 100644
 +				int32 width = event.GetInt32("width", -1) + 1;
 +				int32 height = event.GetInt32("height", -1) + 1;
 +				if (pWin != NULL && width > 0 && height > 0) {
++					width += priv->csd[0] + priv->csd[1];
++					height += priv->csd[2] + priv->csd[3];
 +					int32 requestedWidth = width;
 +					int32 requestedHeight = height;
 +					vApplySizeHints(pWin, &width, &height);
@@ -2656,8 +2764,9 @@ new file mode 100644
 +					// A rounded size can equal the current X size, so no
 +					// PositionWindow follows; correct the native frame here.
 +					if (width != requestedWidth || height != requestedHeight) {
-+						priv->surface->ResizeTo((float)width - 1,
-+							(float)height - 1);
++						priv->surface->ResizeTo(
++							(float)(width - priv->csd[0] - priv->csd[1]) - 1,
++							(float)(height - priv->csd[2] - priv->csd[3]) - 1);
 +					}
 +				}
 +				break;
@@ -2823,8 +2932,8 @@ new file mode 100644
 +	// buffer are both addressed relative to their own origin.
 +	int32 bw = buffer->Bounds().IntegerWidth() + 1;
 +	int32 bh = buffer->Bounds().IntegerHeight() + 1;
-+	int32 offX = pWin->drawable.x;
-+	int32 offY = pWin->drawable.y;
++	int32 offX = pWin->drawable.x + priv->csd[0];
++	int32 offY = pWin->drawable.y + priv->csd[2];
 +	int32 srcOffX = pix->screen_x;
 +	int32 srcOffY = pix->screen_y;
 +
@@ -3123,7 +3232,7 @@ new file mode 100644
 +		return;
 +	}
 +
-+	BRect screen = BScreen().Frame();
++	BRect screen = vWorkArea();
 +	float left = priv->restoreX;
 +	float top = priv->restoreY;
 +	float width = priv->restoreWidth;
@@ -3181,6 +3290,16 @@ new file mode 100644
 +
 +	if (pWin->overrideRedirect)
 +		return;
++
++	int32 csd[4];
++	vReadCsdExtents(pWin, csd);
++	if (memcmp(priv->csd, csd, sizeof(csd)) != 0) {
++		memcpy(priv->csd, csd, sizeof(csd));
++		vPlaceSurface(priv, pWin);
++		VUploadWindowDamage(priv, pWin->drawable.x, pWin->drawable.y,
++			pWin->drawable.x + (int32)pWin->drawable.width,
++			pWin->drawable.y + (int32)pWin->drawable.height);
++	}
 +
 +	if (extentsChanged)
 +		vPublishExtents(pWin, style.extents);
@@ -3531,8 +3650,11 @@ new file mode 100644
 +		priv->height = pWin->drawable.height;
 +		priv->serial = atomic_add(&sWindowSerial, 1) + 1;
 +
-+		BRect frame(priv->x, priv->y, priv->x + priv->width - 1,
-+			priv->y + priv->height - 1);
++		if (!pWin->overrideRedirect)
++			vReadCsdExtents(pWin, priv->csd);
++		BRect frame(priv->x + priv->csd[0], priv->y + priv->csd[2],
++			priv->x + priv->width - priv->csd[1] - 1,
++			priv->y + priv->height - priv->csd[3] - 1);
 +		const char* title = "X11";
 +
 +		// VApplyWindowState() sets the real style right after creation.
@@ -3600,6 +3722,9 @@ new file mode 100644
 +					priv->extents[0]),
 +				vMaxI(pWin->drawable.y, priv->extents[2])));
 +		}
++		if (!pWin->overrideRedirect && !priv->fullscreen && !priv->maxH
++			&& !priv->maxV)
++			vClampToWorkArea(priv);
 +
 +		priv->surface->Show();
 +		priv->mapped = true;
@@ -3642,11 +3767,12 @@ new file mode 100644
 +
 +	VWindowPriv* priv = vPriv(pWin);
 +	if (priv != NULL && priv->surface != NULL) {
-+		// Skip echoes of a native move.
-+		if (priv->surface->Frame().LeftTop() != BPoint(x, y))
-+			priv->surface->MoveTo(BPoint(x, y));
 +		priv->x = x;
 +		priv->y = y;
++		// Skip echoes of a native move.
++		if (priv->surface->Frame().LeftTop() != BPoint(x + priv->csd[0],
++				y + priv->csd[2]))
++			priv->surface->MoveTo(BPoint(x + priv->csd[0], y + priv->csd[2]));
 +		VSyncWindowFrame(priv);
 +	}
 +
@@ -3683,9 +3809,12 @@ new file mode 100644
 +	priv->width = width;
 +	priv->height = height;
 +	BRect frame = priv->surface->Frame();
-+	if (frame.IntegerWidth() + 1 != width
-+		|| frame.IntegerHeight() + 1 != height) {
-+		priv->surface->ResizeTo((float)width - 1, (float)height - 1);
++	int32 shownWidth = width - priv->csd[0] - priv->csd[1];
++	int32 shownHeight = height - priv->csd[2] - priv->csd[3];
++	if (frame.IntegerWidth() + 1 != shownWidth
++		|| frame.IntegerHeight() + 1 != shownHeight) {
++		priv->surface->ResizeTo((float)shownWidth - 1,
++			(float)shownHeight - 1);
 +	}
 +
 +	// The buffer is reallocated for the new size; refill all of it.
