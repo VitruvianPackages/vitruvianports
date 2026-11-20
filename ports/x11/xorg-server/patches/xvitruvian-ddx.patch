@@ -2324,7 +2324,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1366 @@
+@@ -0,0 +1,1367 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -3387,6 +3387,7 @@ new file mode 100644
 +		"_NET_ACTIVE_WINDOW",
 +		"_NET_WM_NAME",
 +		"_NET_FRAME_EXTENTS",
++		"_GTK_FRAME_EXTENTS",
 +		"_NET_REQUEST_FRAME_EXTENTS",
 +		"_NET_WM_MOVERESIZE",
 +		"_NET_WM_ALLOWED_ACTIONS",
