@@ -2048,7 +2048,7 @@ diff --git a/hw/vitruvian/vSettings.cpp b/hw/vitruvian/vSettings.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vSettings.cpp
-@@ -0,0 +1,270 @@
+@@ -0,0 +1,271 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2188,7 +2188,7 @@ new file mode 100644
 +	data.push_back(0);
 +	data.push_back(0);
 +	vPut32(data, sSerial);
-+	vPut32(data, 8);
++	vPut32(data, 9);
 +
 +	vPutInt(data, "Xft/DPI", kDpi * 1024);
 +	vPutInt(data, "Xft/Antialias", 1);
@@ -2198,6 +2198,7 @@ new file mode 100644
 +	vPutString(data, "Gtk/FontName", font.String());
 +	vPutString(data, "Net/ThemeName", dark ? "Adwaita-dark" : "Adwaita");
 +	vPutInt(data, "Gtk/CursorThemeSize", kCursorSize);
++	vPutString(data, "Gtk/DecorationLayout", ":minimize,maximize,close");
 +
 +	Atom property = vSettingAtom("_XSETTINGS_SETTINGS");
 +	dixChangeWindowProperty(serverClient, sOwner, property, property, 8,
@@ -2323,7 +2324,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1359 @@
+@@ -0,0 +1,1366 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2380,7 +2381,7 @@ new file mode 100644
 +static Atom
 +vAtom(const char* name)
 +{
-+	return MakeAtom(name, strlen(name), FALSE);
++	return MakeAtom(name, strlen(name), TRUE);
 +}
 +
 +
@@ -3006,19 +3007,20 @@ new file mode 100644
 +			DixReadAccess) == Success && prop != NULL)
 +		style->feel = B_MODAL_APP_WINDOW_FEEL;
 +
-+	// Motif: flags bit 1 selects decorations, 0 means none.
++	// Motif: flags bit 1 selects decorations, 0 means none. Windows that
++	// draw their own title (client-side decorations) keep a thin native
++	// border so they stay movable and resizable from the edge.
++	bool clientDecorated = false;
 +	CARD32 cards[16];
 +	count = vReadCards(pWin, vAtom("_MOTIF_WM_HINTS"), cards, 16);
 +	if (count >= 3 && (cards[0] & (1 << 1)) != 0 && cards[2] == 0)
-+		borderless = true;
++		clientDecorated = true;
 +
-+	// Client-side decorations: the client draws frame and shadow.
 +	if (vReadCards(pWin, vAtom("_GTK_FRAME_EXTENTS"), cards, 16) >= 4)
-+		borderless = true;
++		clientDecorated = true;
 +
-+	if (vWindowHasAtom(pWin, vAtom("_NET_WM_STATE"),
-+			vAtom("_NET_WM_STATE_FULLSCREEN")))
-+		borderless = true;
++	bool fullscreen = vWindowHasAtom(pWin, vAtom("_NET_WM_STATE"),
++		vAtom("_NET_WM_STATE_FULLSCREEN"));
 +
 +	// WM_NORMAL_HINTS: PMinSize 1<<4, PMaxSize 1<<5.
 +	count = vReadCards(pWin, XA_WM_NORMAL_HINTS, cards, 16);
@@ -3040,10 +3042,16 @@ new file mode 100644
 +		style->flags |= B_NOT_RESIZABLE | B_NOT_ZOOMABLE;
 +	}
 +
-+	if (borderless)
++	if (borderless || fullscreen)
 +		style->look = B_NO_BORDER_WINDOW_LOOK;
++	else if (clientDecorated && style->look == B_TITLED_WINDOW_LOOK)
++		style->look = B_BORDERED_WINDOW_LOOK;
 +
 +	// Tab and border sizes of the native decorations.
++	if (style->look == B_BORDERED_WINDOW_LOOK) {
++		style->extents[0] = style->extents[1] = style->extents[2]
++			= style->extents[3] = 1;
++	}
 +	if (style->look == B_TITLED_WINDOW_LOOK
 +		|| style->look == B_FLOATING_WINDOW_LOOK) {
 +		style->extents[0] = style->extents[1] = style->extents[3] = 5;
