@@ -10,11 +10,11 @@
  		--enable-dbe=no \
 --- a/debian/control
 +++ b/debian/control
-@@ -32,6 +32,7 @@
+@@ -32,6 +32,6 @@
  Section: libs
  Architecture: any
- Depends: ${misc:Depends}, ${shlibs:Depends}
-+Recommends: xvitruvian-launcher
+-Depends: ${misc:Depends}, ${shlibs:Depends}
++Depends: ${misc:Depends}, ${shlibs:Depends}, xvitruvian-launcher
  Pre-Depends: ${misc:Pre-Depends}
  Multi-Arch: same
  Description: X C Binding

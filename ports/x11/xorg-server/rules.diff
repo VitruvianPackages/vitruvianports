@@ -11,7 +11,7 @@ diff -urN a/debian/control b/debian/control
  Build-Depends-Indep: xz-utils
  Standards-Version: 3.9.8
  Rules-Requires-Root: binary-targets
-@@ -238,6 +241,33 @@
+@@ -238,6 +241,34 @@
   .
   This package is built from the X.org xserver module.
  
@@ -34,6 +34,7 @@ diff -urN a/debian/control b/debian/control
 +Architecture: all
 +Depends:
 + xserver-xvitruvian (>= ${source:Version}),
++ xfonts-base,
 + ${misc:Depends},
 +Description: on-demand X server for V\OS sessions
 + Pulls in the Xvitr X server. The V\OS session starts it when the first
