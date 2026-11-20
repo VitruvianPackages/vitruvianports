@@ -10,7 +10,7 @@ Homepage: https://github.com/threedeyes/qthaikuplugins
 
 Package: qt5-vos-plugin
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}, ${qt:Depends}
+Depends: ${shlibs:Depends}, ${misc:Depends}
 Description: Qt 5 platform plugin for V\OS
  Runs Qt 5 applications as native V\OS applications: windows, menus,
  file dialogs, clipboard and keyboard go through the V\OS kits instead

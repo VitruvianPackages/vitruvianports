@@ -1,3 +1,9 @@
+qt5-vos-plugin (0.0+git20260815-2) unstable; urgency=medium
+
+  * Drop the Qt ABI override; the shlibs already carry qtbase-abi.
+
+ -- The Vitruvian Project <packages@v-os.dev>  Fri, 20 Nov 2026 09:10:28 +0000
+
 qt5-vos-plugin (0.0+git20260815-1) unstable; urgency=medium
 
   * Initial package.

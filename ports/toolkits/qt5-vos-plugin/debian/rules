@@ -8,8 +8,3 @@ override_dh_auto_install:
 	install -D -m 0644 platforms/qhaikuplatform/plugins/platforms/libqhaiku.so \
 		debian/qt5-vos-plugin/usr/lib/$(DEB_HOST_MULTIARCH)/qt5/plugins/platforms/libqhaiku.so
 
-# Private Qt API: only the Qt it was built against will do.
-QT_VERSION := $(shell qmake-qt5 -query QT_VERSION)
-
-override_dh_gencontrol:
-	dh_gencontrol -- -Vqt:Depends="qtbase-abi-$(subst .,-,$(QT_VERSION))"
