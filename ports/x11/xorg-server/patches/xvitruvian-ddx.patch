@@ -4329,7 +4329,7 @@ diff --git a/hw/vitruvian/vCursor.cpp b/hw/vitruvian/vCursor.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vCursor.cpp
-@@ -0,0 +1,487 @@
+@@ -0,0 +1,597 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -4355,6 +4355,7 @@ new file mode 100644
 +#include <Rect.h>
 +#include <Surface.h>
 +
++#include <stdio.h>
 +#include <string.h>
 +
 +#include <map>
@@ -4593,6 +4594,114 @@ new file mode 100644
 +}
 +
 +
++// Clients such as Chromium load cursors from the Xcursor theme and send
++// the ARGB image without naming it. Index the theme's images by content
++// so the native cursor can stand in for them.
++struct VThemeImage {
++	uint32		hash;
++	BCursorID	id;
++};
++
++static std::vector<VThemeImage> sThemeImages;
++static bool sThemeBuilt = false;
++
++
++static uint32
++vRead32(const uint8* data)
++{
++	return data[0] | (data[1] << 8) | (data[2] << 16) | ((uint32)data[3] << 24);
++}
++
++
++static uint32
++vArgbHash(const uint8* pixels, uint32 width, uint32 height)
++{
++	uint32 sizes[2] = { width, height };
++	uint32 hash = vHashBytes(2166136261u, sizes, sizeof(sizes));
++	return vHashBytes(hash, pixels, (size_t)width * height * 4);
++}
++
++
++static void
++vIndexThemeFile(const char* path, BCursorID id)
++{
++	FILE* file = fopen(path, "rb");
++	if (file == NULL)
++		return;
++
++	fseek(file, 0, SEEK_END);
++	long size = ftell(file);
++	fseek(file, 0, SEEK_SET);
++	if (size < 16 || size > 8 * 1024 * 1024) {
++		fclose(file);
++		return;
++	}
++	std::vector<uint8> data((size_t)size);
++	bool ok = fread(data.data(), 1, data.size(), file) == data.size();
++	fclose(file);
++	if (!ok || memcmp(data.data(), "Xcur", 4) != 0)
++		return;
++
++	uint32 count = vRead32(&data[12]);
++	for (uint32 i = 0; i < count && 16 + (i + 1) * 12 <= data.size(); i++) {
++		const uint8* entry = &data[16 + i * 12];
++		if (vRead32(entry) != 0xfffd0002)
++			continue;
++		size_t position = vRead32(entry + 8);
++		if (position + 36 > data.size())
++			continue;
++		uint32 width = vRead32(&data[position + 16]);
++		uint32 height = vRead32(&data[position + 20]);
++		if (width == 0 || height == 0 || width > 512 || height > 512
++			|| position + 36 + (size_t)width * height * 4 > data.size())
++			continue;
++		VThemeImage image = { vArgbHash(&data[position + 36], width, height),
++			id };
++		sThemeImages.push_back(image);
++	}
++}
++
++
++static void
++vBuildThemeTable()
++{
++	sThemeBuilt = true;
++	static const char* const kDirs[] = {
++		"/usr/share/icons/Adwaita/cursors", "/usr/share/icons/default/cursors",
++		NULL
++	};
++	for (int d = 0; kDirs[d] != NULL; d++) {
++		for (int i = 0; kNamedCursors[i].name != NULL; i++) {
++			char path[256];
++			snprintf(path, sizeof(path), "%s/%s", kDirs[d],
++				kNamedCursors[i].name);
++			vIndexThemeFile(path, kNamedCursors[i].id);
++		}
++	}
++}
++
++
++static bool
++vMapThemeImage(CursorPtr cursor, BCursorID* id)
++{
++	CursorBitsPtr bits = cursor->bits;
++	if (bits->argb == NULL)
++		return false;
++	if (!sThemeBuilt)
++		vBuildThemeTable();
++
++	uint32 hash = vArgbHash((const uint8*)bits->argb, bits->width,
++		bits->height);
++	for (size_t i = 0; i < sThemeImages.size(); i++) {
++		if (sThemeImages[i].hash == hash) {
++			*id = sThemeImages[i].id;
++			return true;
++		}
++	}
++	return false;
++}
++
++
 +static bool
 +vMapName(CursorPtr cursor, BCursorID* id)
 +{
@@ -4710,7 +4819,8 @@ new file mode 100644
 +		return new(std::nothrow) BCursor(B_CURSOR_ID_NO_CURSOR);
 +
 +	BCursorID id;
-+	if (vMapName(cursor, &id) || vMapGlyph(cursor, &id))
++	if (vMapName(cursor, &id) || vMapGlyph(cursor, &id)
++		|| vMapThemeImage(cursor, &id))
 +		return new(std::nothrow) BCursor(id);
 +
 +	BBitmap* bitmap = vCursorBitmap(cursor);
