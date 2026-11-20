@@ -1816,7 +1816,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,227 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1939,8 +1939,22 @@ new file mode 100644
 +	bool		topLevel;
 +	bool		mapped;
 +	bool		dirty;
-+	bool		zoomed;
 +	bool		fullscreen;
++	bool		maxH;
++	bool		maxV;
++	bool		minimized;
++	bool		restoreSaved;
++	bool		styled;
++	int8		resizable;
++	int32		look;
++	int32		feel;
++	uint32		flags;
++	int32		extents[4];
++	float		limits[4];
++	int			dragMode;
++	float		dragX;
++	float		dragY;
++	float		dragFrame[4];
 +	int32		restoreX;
 +	int32		restoreY;
 +	int32		restoreWidth;
@@ -2309,7 +2323,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,981 @@
+@@ -0,0 +1,1359 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2517,37 +2531,75 @@ new file mode 100644
 +}
 +
 +
-+// The zoom button toggles between the screen and the previous frame; the
-+// moved/resized events that follow carry it over to the X window.
++static void vChangeNetStates(WindowPtr pWin, int action, Atom a, Atom b);
++
++
++
++//	#pragma mark - interactive move and resize
++
++
++// _NET_WM_MOVERESIZE directions.
++enum {
++	kMoveResizeMove = 8,
++	kMoveResizeCancel = 11,
++};
++
++
 +static void
-+vZoom(VWindowPriv* priv)
++vDragEnd(VWindowPriv* priv)
 +{
-+	BSurface* surface = priv->surface;
-+	if (priv->zoomed) {
-+		surface->MoveTo(BPoint(priv->restoreX, priv->restoreY));
-+		surface->ResizeTo(priv->restoreWidth, priv->restoreHeight);
-+		priv->zoomed = false;
-+		return;
-+	}
-+
-+	BRect frame = surface->Frame();
-+	priv->restoreX = (int32)frame.left;
-+	priv->restoreY = (int32)frame.top;
-+	priv->restoreWidth = frame.IntegerWidth();
-+	priv->restoreHeight = frame.IntegerHeight();
-+
-+	BRect screen = BScreen().Frame();
-+	// Leave room for the tab and the window border.
-+	const float kBorder = 5;
-+	const float kTab = 22;
-+	surface->MoveTo(BPoint(screen.left + kBorder, screen.top + kTab));
-+	surface->ResizeTo(screen.Width() - 2 * kBorder,
-+		screen.Height() - kTab - kBorder);
-+	priv->zoomed = true;
++	priv->dragMode = -1;
 +}
 +
 +
-+static void vChangeNetState(WindowPtr pWin, int action, Atom wanted);
++static void
++vDragStart(VWindowPriv* priv, float x, float y, int mode)
++{
++	BRect frame = priv->surface->Frame();
++	priv->dragMode = mode;
++	priv->dragX = x;
++	priv->dragY = y;
++	priv->dragFrame[0] = frame.left;
++	priv->dragFrame[1] = frame.top;
++	priv->dragFrame[2] = frame.right;
++	priv->dragFrame[3] = frame.bottom;
++}
++
++
++static void
++vDragUpdate(VWindowPriv* priv, BPoint where)
++{
++	float dx = where.x - priv->dragX;
++	float dy = where.y - priv->dragY;
++	float l = priv->dragFrame[0];
++	float t = priv->dragFrame[1];
++	float r = priv->dragFrame[2];
++	float b = priv->dragFrame[3];
++
++	int mode = priv->dragMode;
++	if (mode == kMoveResizeMove) {
++		l += dx;
++		r += dx;
++		t += dy;
++		b += dy;
++	} else {
++		// 0 TL, 1 T, 2 TR, 3 R, 4 BR, 5 B, 6 BL, 7 L
++		if (mode == 0 || mode == 6 || mode == 7)
++			l = vMinI((int32)(l + dx), (int32)r - 8);
++		if (mode == 2 || mode == 3 || mode == 4)
++			r = vMaxI((int32)(r + dx), (int32)l + 8);
++		if (mode == 0 || mode == 1 || mode == 2)
++			t = vMinI((int32)(t + dy), (int32)b - 8);
++		if (mode == 4 || mode == 5 || mode == 6)
++			b = vMaxI((int32)(b + dy), (int32)t + 8);
++	}
++
++	BRect frame = priv->surface->Frame();
++	if (frame.left != l || frame.top != t)
++		priv->surface->MoveTo(BPoint(l, t));
++	if (frame.Width() != r - l || frame.Height() != b - t)
++		priv->surface->ResizeTo(r - l, b - t);
++}
 +
 +
 +//	#pragma mark - surface events
@@ -2565,6 +2617,16 @@ new file mode 100644
 +			VDndPointerMoved(event);
 +		else if (event.what == _MESSAGE_DROPPED_ && event.WasDropped())
 +			VDndDropped(event);
++		if (priv->dragMode >= 0) {
++			BPoint where;
++			if (event.what == B_MOUSE_MOVED
++				&& event.FindPoint("screen_where", &where) == B_OK) {
++				vDragUpdate(priv, where);
++				continue;
++			}
++			if (event.what == B_MOUSE_UP)
++				vDragEnd(priv);
++		}
 +		switch (event.what) {
 +			case B_WINDOW_MOVED:
 +			{
@@ -2607,17 +2669,22 @@ new file mode 100644
 +				VSendDeleteWindow(pWin);
 +				break;
 +			case B_ZOOM:
-+				vZoom(priv);
++				if (pWin != NULL) {
++					vChangeNetStates(pWin, priv->maxH && priv->maxV ? 0 : 1,
++						vAtom("_NET_WM_STATE_MAXIMIZED_HORZ"),
++						vAtom("_NET_WM_STATE_MAXIMIZED_VERT"));
++				}
 +				break;
 +			case B_MINIMIZE:
 +			{
 +				// Tab double click and Deskbar restore.
 +				bool minimize;
 +				if (event.FindBool("minimize", &minimize) == B_OK) {
++					priv->minimized = minimize;
 +					priv->surface->Minimize(minimize);
 +					if (pWin != NULL) {
-+						vChangeNetState(pWin, minimize ? 1 : 0,
-+							vAtom("_NET_WM_STATE_HIDDEN"));
++						vChangeNetStates(pWin, minimize ? 1 : 0,
++							vAtom("_NET_WM_STATE_HIDDEN"), None);
 +					}
 +				}
 +				break;
@@ -2837,6 +2904,235 @@ new file mode 100644
 +}
 +
 +
++// Reads a 32-bit property of any type; returns the item count or -1.
++static int
++vReadCards(WindowPtr pWin, Atom property, CARD32* out, int maxItems)
++{
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, pWin, property, serverClient,
++			DixReadAccess) != Success || prop == NULL || prop->format != 32)
++		return -1;
++
++	int count = vMinI((int32)prop->size, maxItems);
++	memcpy(out, prop->data, (size_t)count * sizeof(CARD32));
++	return count;
++}
++
++
++static void
++vSetAtomList(WindowPtr pWin, Atom property, Atom* atoms, int count)
++{
++	dixChangeWindowProperty(serverClient, pWin, property, XA_ATOM, 32,
++		PropModeReplace, count, atoms, TRUE);
++}
++
++
++
++struct VStyle {
++	window_look	look;
++	window_feel	feel;
++	uint32		flags;
++	int32		extents[4];		// left, right, top, bottom
++	bool		resizable;
++	float		limits[4];		// min/max width, min/max height
++};
++
++
++// Decoration, feel and limits a window manager would pick from the
++// client's hints: window type, Motif/GTK decoration hints, transience,
++// size hints and the fullscreen state.
++static void
++vComputeStyle(WindowPtr pWin, VStyle* style)
++{
++	memset(style, 0, sizeof(*style));
++	style->look = B_TITLED_WINDOW_LOOK;
++	style->feel = B_NORMAL_WINDOW_FEEL;
++	style->resizable = true;
++	style->limits[0] = style->limits[2] = 1;
++	style->limits[1] = style->limits[3] = 32767;
++
++	if (pWin->overrideRedirect) {
++		style->look = B_NO_BORDER_WINDOW_LOOK;
++		style->feel = B_FLOATING_APP_WINDOW_FEEL;
++		style->flags = B_AVOID_FOCUS;
++		style->resizable = false;
++		return;
++	}
++
++	bool borderless = false;
++	Atom types[16];
++	int count = vReadAtomList(pWin, vAtom("_NET_WM_WINDOW_TYPE"), types, 16);
++	static const char* const kPopupTypes[] = { "MENU", "DROPDOWN_MENU",
++		"POPUP_MENU", "TOOLTIP", "COMBO", "DND", NULL };
++	bool done = false;
++	for (int i = 0; i < count && !done; i++) {
++		done = true;
++		if (types[i] == vAtom("_NET_WM_WINDOW_TYPE_UTILITY")
++			|| types[i] == vAtom("_NET_WM_WINDOW_TYPE_TOOLBAR")) {
++			style->look = B_FLOATING_WINDOW_LOOK;
++			style->feel = B_FLOATING_APP_WINDOW_FEEL;
++		} else if (types[i] == vAtom("_NET_WM_WINDOW_TYPE_SPLASH")) {
++			borderless = true;
++			style->flags |= B_AVOID_FOCUS;
++		} else if (types[i] == vAtom("_NET_WM_WINDOW_TYPE_NOTIFICATION")) {
++			borderless = true;
++			style->feel = B_FLOATING_ALL_WINDOW_FEEL;
++			style->flags |= B_AVOID_FOCUS;
++		} else if (types[i] == vAtom("_NET_WM_WINDOW_TYPE_DIALOG")
++			|| types[i] == vAtom("_NET_WM_WINDOW_TYPE_NORMAL")) {
++			// titled, normal
++		} else {
++			done = false;
++			for (int k = 0; kPopupTypes[k] != NULL; k++) {
++				char name[64];
++				snprintf(name, sizeof(name), "_NET_WM_WINDOW_TYPE_%s",
++					kPopupTypes[k]);
++				if (types[i] == vAtom(name)) {
++					borderless = true;
++					style->feel = B_FLOATING_APP_WINDOW_FEEL;
++					style->flags |= B_AVOID_FOCUS;
++					done = true;
++				}
++			}
++		}
++	}
++
++	// Modal state makes a transient dialog app-modal; there is no subset
++	// API on the surface.
++	PropertyPtr prop = NULL;
++	if (vWindowHasAtom(pWin, vAtom("_NET_WM_STATE"),
++			vAtom("_NET_WM_STATE_MODAL"))
++		&& dixLookupProperty(&prop, pWin, XA_WM_TRANSIENT_FOR, serverClient,
++			DixReadAccess) == Success && prop != NULL)
++		style->feel = B_MODAL_APP_WINDOW_FEEL;
++
++	// Motif: flags bit 1 selects decorations, 0 means none.
++	CARD32 cards[16];
++	count = vReadCards(pWin, vAtom("_MOTIF_WM_HINTS"), cards, 16);
++	if (count >= 3 && (cards[0] & (1 << 1)) != 0 && cards[2] == 0)
++		borderless = true;
++
++	// Client-side decorations: the client draws frame and shadow.
++	if (vReadCards(pWin, vAtom("_GTK_FRAME_EXTENTS"), cards, 16) >= 4)
++		borderless = true;
++
++	if (vWindowHasAtom(pWin, vAtom("_NET_WM_STATE"),
++			vAtom("_NET_WM_STATE_FULLSCREEN")))
++		borderless = true;
++
++	// WM_NORMAL_HINTS: PMinSize 1<<4, PMaxSize 1<<5.
++	count = vReadCards(pWin, XA_WM_NORMAL_HINTS, cards, 16);
++	if (count >= 9) {
++		if ((cards[0] & (1 << 4)) != 0) {
++			style->limits[0] = vMaxI(1, (int32)cards[5] - 1);
++			style->limits[2] = vMaxI(1, (int32)cards[6] - 1);
++		}
++		if ((cards[0] & (1 << 5)) != 0 && cards[7] > 0 && cards[8] > 0) {
++			style->limits[1] = vMaxI((int32)style->limits[0],
++				(int32)cards[7] - 1);
++			style->limits[3] = vMaxI((int32)style->limits[2],
++				(int32)cards[8] - 1);
++		}
++	}
++	if (style->limits[0] >= style->limits[1]
++		&& style->limits[2] >= style->limits[3]) {
++		style->resizable = false;
++		style->flags |= B_NOT_RESIZABLE | B_NOT_ZOOMABLE;
++	}
++
++	if (borderless)
++		style->look = B_NO_BORDER_WINDOW_LOOK;
++
++	// Tab and border sizes of the native decorations.
++	if (style->look == B_TITLED_WINDOW_LOOK
++		|| style->look == B_FLOATING_WINDOW_LOOK) {
++		style->extents[0] = style->extents[1] = style->extents[3] = 5;
++		style->extents[2] = 27;
++	}
++}
++
++
++static void
++vPublishExtents(WindowPtr pWin, const int32* extents)
++{
++	CARD32 values[4] = { (CARD32)extents[0], (CARD32)extents[1],
++		(CARD32)extents[2], (CARD32)extents[3] };
++	dixChangeWindowProperty(serverClient, pWin,
++		vAtom("_NET_FRAME_EXTENTS"), XA_CARDINAL, 32, PropModeReplace, 4,
++		values, TRUE);
++}
++
++
++static void
++vPublishActions(WindowPtr pWin, bool resizable)
++{
++	Atom actions[8];
++	int count = 0;
++	actions[count++] = vAtom("_NET_WM_ACTION_MOVE");
++	actions[count++] = vAtom("_NET_WM_ACTION_MINIMIZE");
++	actions[count++] = vAtom("_NET_WM_ACTION_CLOSE");
++	if (resizable) {
++		actions[count++] = vAtom("_NET_WM_ACTION_RESIZE");
++		actions[count++] = vAtom("_NET_WM_ACTION_MAXIMIZE_HORZ");
++		actions[count++] = vAtom("_NET_WM_ACTION_MAXIMIZE_VERT");
++		actions[count++] = vAtom("_NET_WM_ACTION_FULLSCREEN");
++	}
++	vSetAtomList(pWin, vAtom("_NET_WM_ALLOWED_ACTIONS"), actions, count);
++}
++
++
++// Moves the frame for the fullscreen and maximized states, and back to the
++// saved frame once none is left.
++static void
++vPlaceWindow(VWindowPriv* priv)
++{
++	bool any = priv->fullscreen || priv->maxH || priv->maxV;
++	if (!any) {
++		if (priv->restoreSaved) {
++			priv->restoreSaved = false;
++			priv->surface->MoveTo(BPoint(priv->restoreX, priv->restoreY));
++			priv->surface->ResizeTo(priv->restoreWidth, priv->restoreHeight);
++		}
++		return;
++	}
++
++	if (!priv->restoreSaved) {
++		BRect frame = priv->surface->Frame();
++		priv->restoreX = (int32)frame.left;
++		priv->restoreY = (int32)frame.top;
++		priv->restoreWidth = frame.IntegerWidth();
++		priv->restoreHeight = frame.IntegerHeight();
++		priv->restoreSaved = true;
++	}
++
++	if (priv->fullscreen) {
++		if (gVScreen != NULL) {
++			priv->surface->Activate();
++			priv->surface->MoveTo(B_ORIGIN);
++			priv->surface->ResizeTo((float)gVScreen->width - 1,
++				(float)gVScreen->height - 1);
++		}
++		return;
++	}
++
++	BRect screen = BScreen().Frame();
++	float left = priv->restoreX;
++	float top = priv->restoreY;
++	float width = priv->restoreWidth;
++	float height = priv->restoreHeight;
++	if (priv->maxH) {
++		left = screen.left + priv->extents[0];
++		width = screen.Width() - priv->extents[0] - priv->extents[1];
++	}
++	if (priv->maxV) {
++		top = screen.top + priv->extents[2];
++		height = screen.Height() - priv->extents[2] - priv->extents[3];
++	}
++	priv->surface->MoveTo(BPoint(left, top));
++	priv->surface->ResizeTo(width, height);
++}
++
++
 +void
 +VApplyWindowState(VWindowPriv* priv)
 +{
@@ -2847,40 +3143,61 @@ new file mode 100644
 +	if (pWin == NULL)
 +		return;
 +
-+	if (priv->topLevel && pWin->overrideRedirect) {
-+		priv->surface->SetLook(B_NO_BORDER_WINDOW_LOOK);
-+		priv->surface->SetFeel(B_FLOATING_APP_WINDOW_FEEL);
-+		priv->surface->SetFlags(B_AVOID_FOCUS);
-+		return;
++	VStyle style;
++	vComputeStyle(pWin, &style);
++
++	if (!priv->styled || priv->look != style.look) {
++		priv->look = style.look;
++		priv->surface->SetLook(style.look);
 +	}
++	if (!priv->styled || priv->feel != style.feel) {
++		priv->feel = style.feel;
++		priv->surface->SetFeel(style.feel);
++	}
++	if (!priv->styled || priv->flags != style.flags) {
++		priv->flags = style.flags;
++		priv->surface->SetFlags(style.flags);
++	}
++	if (!priv->styled || memcmp(priv->limits, style.limits,
++			sizeof(style.limits)) != 0) {
++		memcpy(priv->limits, style.limits, sizeof(style.limits));
++		priv->surface->SetSizeLimits(style.limits[0], style.limits[1],
++			style.limits[2], style.limits[3]);
++	}
++	bool extentsChanged = !priv->styled
++		|| memcmp(priv->extents, style.extents, sizeof(style.extents)) != 0;
++	memcpy(priv->extents, style.extents, sizeof(style.extents));
++	bool actionsChanged = priv->resizable != (int8)style.resizable;
++	priv->resizable = style.resizable;
++	priv->styled = true;
++
++	if (pWin->overrideRedirect)
++		return;
++
++	if (extentsChanged)
++		vPublishExtents(pWin, style.extents);
++	if (actionsChanged)
++		vPublishActions(pWin, style.resizable);
 +
 +	Atom state = vAtom("_NET_WM_STATE");
-+	Atom full = vAtom("_NET_WM_STATE_FULLSCREEN");
-+	if (vWindowHasAtom(pWin, state, full)) {
-+		if (priv->fullscreen)
-+			return;
-+		// V\OS has no fullscreen look; borderless plus screen-sized
-+		// frame is the native equivalent for an X client's request.
-+		// The frame is saved the way zoom does, to undo it later.
-+		BRect frame = priv->surface->Frame();
-+		priv->restoreX = (int32)frame.left;
-+		priv->restoreY = (int32)frame.top;
-+		priv->restoreWidth = frame.IntegerWidth();
-+		priv->restoreHeight = frame.IntegerHeight();
-+		priv->fullscreen = true;
-+		priv->surface->SetLook(B_NO_BORDER_WINDOW_LOOK);
-+		priv->surface->Activate();
-+		if (gVScreen != NULL) {
-+			priv->surface->MoveTo(B_ORIGIN);
-+			priv->surface->ResizeTo((float)gVScreen->width - 1,
-+				(float)gVScreen->height - 1);
-+		}
-+	} else if (priv->fullscreen) {
-+		priv->fullscreen = false;
-+		priv->zoomed = false;
-+		priv->surface->SetLook(B_TITLED_WINDOW_LOOK);
-+		priv->surface->MoveTo(BPoint(priv->restoreX, priv->restoreY));
-+		priv->surface->ResizeTo(priv->restoreWidth, priv->restoreHeight);
++	bool full = vWindowHasAtom(pWin, state,
++		vAtom("_NET_WM_STATE_FULLSCREEN"));
++	bool maxH = vWindowHasAtom(pWin, state,
++		vAtom("_NET_WM_STATE_MAXIMIZED_HORZ"));
++	bool maxV = vWindowHasAtom(pWin, state,
++		vAtom("_NET_WM_STATE_MAXIMIZED_VERT"));
++	if (full != priv->fullscreen || maxH != priv->maxH || maxV != priv->maxV) {
++		priv->fullscreen = full;
++		priv->maxH = maxH;
++		priv->maxV = maxV;
++		vPlaceWindow(priv);
++	} else if (extentsChanged && (maxH || maxV) && !full)
++		vPlaceWindow(priv);
++
++	bool hidden = vWindowHasAtom(pWin, state, vAtom("_NET_WM_STATE_HIDDEN"));
++	if (hidden != priv->minimized) {
++		priv->minimized = hidden;
++		priv->surface->Minimize(hidden);
 +	}
 +}
 +
@@ -2897,50 +3214,51 @@ new file mode 100644
 +
 +	if (prop == XA_WM_NAME || prop == netName)
 +		VSyncWindowTitle(priv);
-+	else if (prop == state)
++	else if (prop == state || prop == vAtom("_NET_WM_WINDOW_TYPE")
++		|| prop == vAtom("_MOTIF_WM_HINTS")
++		|| prop == vAtom("_GTK_FRAME_EXTENTS") || prop == XA_WM_NORMAL_HINTS
++		|| prop == XA_WM_TRANSIENT_FOR)
 +		VApplyWindowState(priv);
 +	else if (prop == vAtom("_NET_WM_PID"))
 +		VWindowAttribute(pWin);
 +}
 +
 +
++
++// Applies a _NET_WM_STATE client message (add, remove, toggle) for up to
++// two atoms in one property write; the property observer then does the
++// native work.
 +static void
-+vSetAtomList(WindowPtr pWin, Atom property, Atom* atoms, int count)
++vChangeNetStates(WindowPtr pWin, int action, Atom first, Atom second)
 +{
-+	dixChangeWindowProperty(serverClient, pWin, property, XA_ATOM, 32,
-+		PropModeReplace, count, atoms, TRUE);
-+}
-+
-+
-+// Applies one _NET_WM_STATE client message item to the window property;
-+// the property observer then does the native work.
-+static void
-+vChangeNetState(WindowPtr pWin, int action, Atom wanted)
-+{
-+	if (wanted == None)
-+		return;
-+
 +	Atom state = vAtom("_NET_WM_STATE");
-+	Atom atoms[65];
++	Atom atoms[66];
 +	int count = vReadAtomList(pWin, state, atoms, 64);
 +	if (count < 0)
 +		count = 0;
 +
-+	int index = -1;
-+	for (int i = 0; i < count; i++) {
-+		if (atoms[i] == wanted)
-+			index = i;
++	bool changed = false;
++	Atom wanted[2] = { first, second };
++	for (int n = 0; n < 2; n++) {
++		if (wanted[n] == None)
++			continue;
++		int index = -1;
++		for (int i = 0; i < count; i++) {
++			if (atoms[i] == wanted[n])
++				index = i;
++		}
++		bool add = action == 1 || (action == 2 && index < 0);
++		if (add && index < 0) {
++			atoms[count++] = wanted[n];
++			changed = true;
++		} else if (!add && index >= 0) {
++			atoms[index] = atoms[--count];
++			changed = true;
++		}
 +	}
 +
-+	bool add = action == 1 || (action == 2 && index < 0);
-+	if (add && index < 0)
-+		atoms[count++] = wanted;
-+	else if (!add && index >= 0)
-+		atoms[index] = atoms[--count];
-+	else
-+		return;
-+
-+	vSetAtomList(pWin, state, atoms, count);
++	if (changed)
++		vSetAtomList(pWin, state, atoms, count);
 +}
 +
 +
@@ -2973,16 +3291,53 @@ new file mode 100644
 +		return sRealSendEvent(client);
 +
 +	if (message->u.l.type == vAtom("_NET_WM_STATE")) {
-+		int action = (int)message->u.l.longs0;
-+		vChangeNetState(pWin, action, (Atom)message->u.l.longs1);
-+		vChangeNetState(pWin, action, (Atom)message->u.l.longs2);
++		vChangeNetStates(pWin, (int)message->u.l.longs0,
++			(Atom)message->u.l.longs1, (Atom)message->u.l.longs2);
++		return Success;
++	}
++
++	// ICCCM: IconicState asks for minimize.
++	if (message->u.l.type == vAtom("WM_CHANGE_STATE")) {
++		if (message->u.l.longs0 == 3)
++			vChangeNetStates(pWin, 1, vAtom("_NET_WM_STATE_HIDDEN"), None);
++		return Success;
++	}
++
++	// The client wants to know the frame before it maps the window.
++	if (message->u.l.type == vAtom("_NET_REQUEST_FRAME_EXTENTS")) {
++		VStyle style;
++		vComputeStyle(pWin, &style);
++		vPublishExtents(pWin, style.extents);
++		return Success;
++	}
++
++	if (message->u.l.type == vAtom("_NET_WM_MOVERESIZE")) {
++		VWindowPriv* priv = vPriv(pWin);
++		if (priv == NULL || priv->surface == NULL || !priv->mapped)
++			return Success;
++		int direction = (int)message->u.l.longs2;
++		if (direction == kMoveResizeCancel) {
++			if (priv->dragMode >= 0) {
++				priv->surface->MoveTo(BPoint(priv->dragFrame[0],
++					priv->dragFrame[1]));
++				priv->surface->ResizeTo(priv->dragFrame[2] - priv->dragFrame[0],
++					priv->dragFrame[3] - priv->dragFrame[1]);
++				vDragEnd(priv);
++			}
++		} else if (direction >= 0 && direction <= kMoveResizeMove
++			&& !priv->fullscreen)
++			vDragStart(priv, (float)(int32)message->u.l.longs0,
++				(float)(int32)message->u.l.longs1, direction);
 +		return Success;
 +	}
 +
 +	if (message->u.l.type == vAtom("_NET_ACTIVE_WINDOW")) {
 +		VWindowPriv* priv = vPriv(pWin);
-+		if (priv != NULL && priv->surface != NULL && priv->mapped)
++		if (priv != NULL && priv->surface != NULL && priv->mapped) {
++			if (priv->minimized)
++				vChangeNetStates(pWin, 0, vAtom("_NET_WM_STATE_HIDDEN"), None);
 +			priv->surface->Activate();
++		}
 +		return Success;
 +	}
 +
@@ -3012,12 +3367,45 @@ new file mode 100644
 +			serverClient, DixReadAccess) == Success)
 +		return;
 +
-+	Atom supported[] = {
-+		vAtom("_NET_SUPPORTED"), vAtom("_NET_SUPPORTING_WM_CHECK"),
-+		vAtom("_NET_WM_STATE"), vAtom("_NET_WM_STATE_FULLSCREEN"),
-+		vAtom("_NET_WM_STATE_HIDDEN"), vAtom("_NET_ACTIVE_WINDOW"),
-+		vAtom("_NET_WM_NAME")
++	static const char* const kSupported[] = {
++		"_NET_SUPPORTED",
++		"_NET_SUPPORTING_WM_CHECK",
++		"_NET_WM_STATE",
++		"_NET_WM_STATE_FULLSCREEN",
++		"_NET_WM_STATE_HIDDEN",
++		"_NET_WM_STATE_MAXIMIZED_HORZ",
++		"_NET_WM_STATE_MAXIMIZED_VERT",
++		"_NET_WM_STATE_MODAL",
++		"_NET_ACTIVE_WINDOW",
++		"_NET_WM_NAME",
++		"_NET_FRAME_EXTENTS",
++		"_NET_REQUEST_FRAME_EXTENTS",
++		"_NET_WM_MOVERESIZE",
++		"_NET_WM_ALLOWED_ACTIONS",
++		"_NET_WM_ACTION_MOVE",
++		"_NET_WM_ACTION_RESIZE",
++		"_NET_WM_ACTION_MINIMIZE",
++		"_NET_WM_ACTION_MAXIMIZE_HORZ",
++		"_NET_WM_ACTION_MAXIMIZE_VERT",
++		"_NET_WM_ACTION_FULLSCREEN",
++		"_NET_WM_ACTION_CLOSE",
++		"_NET_WM_WINDOW_TYPE",
++		"_NET_WM_WINDOW_TYPE_NORMAL",
++		"_NET_WM_WINDOW_TYPE_DIALOG",
++		"_NET_WM_WINDOW_TYPE_UTILITY",
++		"_NET_WM_WINDOW_TYPE_TOOLBAR",
++		"_NET_WM_WINDOW_TYPE_SPLASH",
++		"_NET_WM_WINDOW_TYPE_NOTIFICATION",
++		"_NET_WM_WINDOW_TYPE_MENU",
++		"_NET_WM_WINDOW_TYPE_DROPDOWN_MENU",
++		"_NET_WM_WINDOW_TYPE_POPUP_MENU",
++		"_NET_WM_WINDOW_TYPE_TOOLTIP",
++		"_NET_WM_WINDOW_TYPE_COMBO",
++		"_NET_WM_WINDOW_TYPE_DND",
 +	};
++	Atom supported[sizeof(kSupported) / sizeof(kSupported[0])];
++	for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); i++)
++		supported[i] = vAtom(kSupported[i]);
 +	vSetAtomList(root, vAtom("_NET_SUPPORTED"), supported,
 +		sizeof(supported) / sizeof(supported[0]));
 +
@@ -3073,6 +3461,7 @@ new file mode 100644
 +		return FALSE;
 +
 +	priv->xWindow = pWin->drawable.id;
++	priv->dragMode = -1;
 +	dixSetPrivate(&pWin->devPrivates, gVWindowPrivateKey, priv);
 +
 +	return fbCreateWindow(pWin);
@@ -3137,6 +3526,7 @@ new file mode 100644
 +			priv->y + priv->height - 1);
 +		const char* title = "X11";
 +
++		// VApplyWindowState() sets the real style right after creation.
 +		window_look look = B_TITLED_WINDOW_LOOK;
 +		window_feel feel = B_NORMAL_WINDOW_FEEL;
 +		if (pWin->overrideRedirect) {
@@ -3185,7 +3575,7 @@ new file mode 100644
 +		// others ask for 0,0 even with no real preference, so cascade it
 +		// like a window manager would. The B_WINDOW_MOVED that follows
 +		// moves the X window too. A fullscreen window stays put.
-+		if (priv->fullscreen) {
++		if (priv->fullscreen || priv->maxH || priv->maxV) {
 +			// Already placed by VApplyWindowState().
 +		} else if (!pWin->overrideRedirect && pWin->drawable.x <= 0
 +			&& pWin->drawable.y <= 0) {
@@ -3193,11 +3583,13 @@ new file mode 100644
 +			int32 step = sCascade++ % 8;
 +			priv->surface->MoveTo(BPoint(40 + step * 24, 60 + step * 24));
 +		} else if (!pWin->overrideRedirect
-+			&& (pWin->drawable.x < 5 || pWin->drawable.y < 27)) {
++			&& (pWin->drawable.x < priv->extents[0]
++				|| pWin->drawable.y < priv->extents[2])) {
 +			// Keep the border and tab on screen, as a window manager
 +			// places a client that asked for the corner.
-+			priv->surface->MoveTo(BPoint(vMaxI(pWin->drawable.x, 5),
-+				vMaxI(pWin->drawable.y, 27)));
++			priv->surface->MoveTo(BPoint(vMaxI(pWin->drawable.x,
++					priv->extents[0]),
++				vMaxI(pWin->drawable.y, priv->extents[2])));
 +		}
 +
 +		priv->surface->Show();
