@@ -5939,7 +5939,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,872 @@
+@@ -0,0 +1,894 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -6209,6 +6209,20 @@ new file mode 100644
 +}
 +
 +
++// The last presented buffer is the one on screen. Idle entries are removed
++// by swapping, so order says nothing: go by time.
++static bigtime_t
++vFlipNewest(const VFlip* flip)
++{
++	bigtime_t newest = 0;
++	for (int i = 0; i < flip->pendingCount; i++) {
++		if (flip->pending[i].slot >= 0 && flip->pending[i].since >= newest)
++			newest = flip->pending[i].since;
++	}
++	return newest;
++}
++
++
 +static void
 +vFlipPoll(void* timeout)
 +{
@@ -6219,13 +6233,17 @@ new file mode 100644
 +	const bigtime_t now = vNow();
 +	for (int f = 0; f < sFlipCount; f++) {
 +		VFlip* flip = sFlips[f];
++		const bigtime_t newest = vFlipNewest(flip);
 +		for (int i = flip->pendingCount - 1; i >= 0; i--) {
 +			const VFlipPending& pending = flip->pending[i];
 +			const bool released = pending.slot >= 0 && flip->surface != NULL
 +				&& flip->surface->ExternalReleased(pending.slot);
 +			const bigtime_t age = now - pending.since;
-+			// The server showed nothing else: do not stall the client.
-+			if (released || age > kFlipBackstop
++			// A buffer still on screen is never idle: the client would
++			// draw into what is shown. Older ones are stuck.
++			const bool onScreen = pending.slot >= 0
++				&& pending.since == newest && !released;
++			if (released || (age > kFlipBackstop && !onScreen)
 +				|| (pending.slot < 0 && age > 100000))
 +				vFlipIdle(flip, i);
 +		}
@@ -6359,9 +6377,13 @@ new file mode 100644
 +	VFlip* flip = vFlipFor(priv->xWindow, false);
 +	PixmapPtr shown = NULL;
 +	if (flip != NULL && flip->pendingCount > 0) {
-+		int slot = flip->pending[flip->pendingCount - 1].slot;
-+		if (slot >= 0 && slot < flip->slotCount)
-+			shown = flip->slots[slot];
++		const bigtime_t newest = vFlipNewest(flip);
++		for (int i = 0; i < flip->pendingCount; i++) {
++			const int slot = flip->pending[i].slot;
++			if (slot >= 0 && slot < flip->slotCount
++				&& flip->pending[i].since == newest)
++				shown = flip->slots[slot];
++		}
 +	}
 +	VDmabuf* buf = shown != NULL ? vDmabuf(shown) : NULL;
 +	if (buf != NULL && (buf->map != NULL || buf->bo != NULL)) {
