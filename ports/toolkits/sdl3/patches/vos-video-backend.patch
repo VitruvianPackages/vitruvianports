@@ -432,7 +432,7 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,987 @@
+@@ -0,0 +1,995 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -443,6 +443,7 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +
 +#include <AppFileInfo.h>
 +#include <Application.h>
++#include <InterfaceDefs.h>
 +#include <Message.h>
 +#include <OS.h>
 +#include <Screen.h>
@@ -782,6 +783,13 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    }
 +    SDL_Scancode scancode = SDL_GetScancodeFromTable(SDL_SCANCODE_TABLE_LINUX, code);
 +    SDL_SendKeyboardKey(0, SDL_DEFAULT_KEYBOARD_ID, code, scancode, down);
++
++    // SDL toggles its own locks; the native ones also change outside this
++    // window, so take them from the event.
++    uint32 modifiers = (uint32)msg.GetInt32("modifiers", 0);
++    SDL_Keymod locks = ((modifiers & B_CAPS_LOCK) ? SDL_KMOD_CAPS : 0)
++        | ((modifiers & B_NUM_LOCK) ? SDL_KMOD_NUM : 0);
++    SDL_SetModState((SDL_GetModState() & ~(SDL_KMOD_CAPS | SDL_KMOD_NUM)) | locks);
 +
 +    if (down && SDL_TextInputActive(data->window)) {
 +        const char *bytes;
