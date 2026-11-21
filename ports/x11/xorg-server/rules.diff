@@ -1,10 +1,11 @@
 diff -urN a/debian/control b/debian/control
 --- a/debian/control
 +++ b/debian/control
-@@ -75,6 +75,9 @@
+@@ -75,6 +75,10 @@
  # systemd-daemon
    libsystemd-dev [linux-any],
    systemd-dev [linux-any],
++  libgbm-dev,
 +  vos-dev,
 +  vos-buildtools,
 +  dh-vos,

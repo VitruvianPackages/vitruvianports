@@ -5911,7 +5911,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,834 @@
+@@ -0,0 +1,847 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -5931,6 +5931,7 @@ new file mode 100644
 +#include <dirent.h>
 +#include <errno.h>
 +#include <fcntl.h>
++#include <gbm.h>
 +#include <linux/dma-buf.h>
 +#include <stdio.h>
 +#include <stdlib.h>
@@ -5973,11 +5974,14 @@ new file mode 100644
 +	void*	map;
 +	size_t	mapSize;
 +	size_t	offset;
++	// The buffer's own row pitch; a gbm copy's pixmap has its own.
++	uint32	stride;
 +	bool	syncing;
-+	// The device's own layout: the pages cannot be read as rows.
-+	bool	tiled;
-+	// Blank pages a tiled buffer shows to copies.
-+	void*	shadow;
++	// Set for the device's own layout, read through gbm into copy.
++	struct gbm_bo*	bo;
++	void*	copy;
++	int		width;
++	int		height;
 +	// The window whose chain holds the slot, 0 when none.
 +	Window	flipWindow;
 +};
@@ -6008,11 +6012,12 @@ new file mode 100644
 +
 +static DevPrivateKeyRec sDmabufKey;
 +static int sRenderFd = -1;
++static char sRenderPath[32];
 +static DestroyPixmapProcPtr sDestroyPixmap = NULL;
 +static VDmabuf** sImported = NULL;
 +static int sImportedCount = 0;
 +static bool sFlipEnabled = true;
-+static char sRenderDriver[32];
++static struct gbm_device* sGbm = NULL;
 +static VFlip** sFlips = NULL;
 +static int sFlipCount = 0;
 +
@@ -6020,6 +6025,17 @@ new file mode 100644
 +vDmabuf(PixmapPtr pix)
 +{
 +	return (VDmabuf*)dixGetPrivateAddr(&pix->devPrivates, &sDmabufKey);
++}
++
++
++static void
++vCloseRender()
++{
++	if (sGbm != NULL)
++		gbm_device_destroy(sGbm);
++	sGbm = NULL;
++	close(sRenderFd);
++	sRenderFd = -1;
 +}
 +
 +
@@ -6054,6 +6070,24 @@ new file mode 100644
 +}
 +
 +
++// Detiles the device's layout into the pixmap storage.
++static void
++vBoRefresh(VDmabuf* buf)
++{
++	uint32_t stride = 0;
++	void* data = NULL;
++	char* src = (char*)gbm_bo_map(buf->bo, 0, 0, buf->width, buf->height,
++		GBM_BO_TRANSFER_READ, &stride, &data);
++	if (src == NULL)
++		return;
++	for (int y = 0; y < buf->height; y++) {
++		memcpy((char*)buf->copy + (size_t)y * buf->width * 4,
++			src + (size_t)y * stride, (size_t)buf->width * 4);
++	}
++	gbm_bo_unmap(buf->bo, data);
++}
++
++
 +// Present copies from the client pixmap inside requests, with no hook to
 +// bracket it. Keep a read window open per imported buffer and renew it
 +// each loop so the next batch of copies sees fresh GPU writes.
@@ -6066,8 +6100,11 @@ new file mode 100644
 +	vFlipPoll(timeout);
 +	for (int i = 0; i < sImportedCount; i++) {
 +		VDmabuf* buf = sImported[i];
-+		if (buf->tiled)
++		if (buf->bo != NULL) {
++			if (buf->flipWindow == 0)
++				vBoRefresh(buf);
 +			continue;
++		}
 +		if (buf->syncing)
 +			vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 +		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
@@ -6216,9 +6253,9 @@ new file mode 100644
 +		desc.width = pixmap->drawable.width;
 +		desc.height = pixmap->drawable.height;
 +		desc.fourcc = kFormatXRGB8888;
-+		desc.stride = pixmap->devKind;
++		desc.stride = buf->stride;
 +		desc.offset = buf->offset;
-+		desc.modifier = buf->tiled ? kModInvalid : kModLinear;
++		desc.modifier = buf->bo != NULL ? kModInvalid : kModLinear;
 +		int32 imported = -1;
 +		if (!priv->surface->ExternalImport(buf->fd, desc, &imported)
 +			|| imported != flip->slotCount)
@@ -6259,8 +6296,7 @@ new file mode 100644
 +
 +
 +// X drew into a window that shows a client buffer. 0: not flipped, 1: the
-+// window pixmap holds the picture again and the caller uploads it, 2: the
-+// buffer cannot be read back, the drawing is dropped.
++// window pixmap holds the picture again and the caller uploads it.
 +int
 +VFlipRestore(VWindowPriv* priv, WindowPtr window, RegionPtr damage)
 +{
@@ -6275,10 +6311,7 @@ new file mode 100644
 +			shown = flip->slots[slot];
 +	}
 +	VDmabuf* buf = shown != NULL ? vDmabuf(shown) : NULL;
-+	if (buf != NULL && buf->tiled)
-+		return 2;
-+
-+	if (buf != NULL && buf->map != NULL) {
++	if (buf != NULL && (buf->map != NULL || buf->bo != NULL)) {
 +		PixmapPtr dst = (*gVScreen->GetWindowPixmap)(window);
 +		if (dst != NULL && dst->devPrivate.ptr != NULL
 +			&& dst->drawable.width == shown->drawable.width
@@ -6289,7 +6322,10 @@ new file mode 100644
 +				(short)dst->drawable.height };
 +			RegionInit(&rest, &box, 1);
 +			RegionSubtract(&rest, &rest, damage);
-+			vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
++			if (buf->bo != NULL)
++				vBoRefresh(buf);
++			else
++				vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
 +			for (int i = 0; i < RegionNumRects(&rest); i++) {
 +				BoxPtr r = RegionRects(&rest) + i;
 +				for (int y = r->y1; y < r->y2; y++) {
@@ -6300,7 +6336,8 @@ new file mode 100644
 +						(size_t)(r->x2 - r->x1) * 4);
 +				}
 +			}
-+			vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++			if (buf->bo == NULL)
++				vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 +			RegionUninit(&rest);
 +		}
 +	}
@@ -6349,8 +6386,11 @@ new file mode 100644
 +				vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 +			if (buf->map != NULL)
 +				munmap(buf->map, buf->mapSize);
-+			free(buf->shadow);
-+			buf->shadow = NULL;
++			if (buf->bo != NULL)
++				gbm_bo_destroy(buf->bo);
++			free(buf->copy);
++			buf->bo = NULL;
++			buf->copy = NULL;
 +			close(buf->fd);
 +			buf->fd = 0;
 +			buf->map = NULL;
@@ -6364,10 +6404,12 @@ new file mode 100644
 +vOpenClient(ClientPtr /*client*/, ScreenPtr /*screen*/,
 +	RRProviderPtr /*provider*/, int* fd)
 +{
-+	int dup = fcntl(sRenderFd, F_DUPFD_CLOEXEC, 3);
-+	if (dup < 0)
++	// A fresh open per client: a shared file would share one GPU address
++	// space, and amdgpu clients would then map over each other.
++	int fresh = open(sRenderPath, O_RDWR | O_CLOEXEC);
++	if (fresh < 0)
 +		return BadAlloc;
-+	*fd = dup;
++	*fd = fresh;
 +	return Success;
 +}
 +
@@ -6376,26 +6418,6 @@ new file mode 100644
 +vOpen(ScreenPtr screen, RRProviderPtr provider, int* fd)
 +{
 +	return vOpenClient(NULL, screen, provider, fd);
-+}
-+
-+
-+// Name of the kernel driver behind a render node or the exporter of a
-+// dma-buf (fdinfo), '' when unknown.
-+static void
-+vExporterOf(int fd, char* name)
-+{
-+	name[0] = '\0';
-+	char path[64];
-+	snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
-+	FILE* file = fopen(path, "r");
-+	if (file == NULL)
-+		return;
-+	char line[128];
-+	while (fgets(line, sizeof(line), file) != NULL) {
-+		if (sscanf(line, "exp_name: %31s", name) == 1)
-+			break;
-+	}
-+	fclose(file);
 +}
 +
 +
@@ -6409,77 +6431,91 @@ new file mode 100644
 +		|| width == 0 || height == 0 || strides[0] < (CARD32)width * 4)
 +		return NULL;
 +
-+	// Rows can be read only from LINEAR, or from INVALID made by another
-+	// GPU. Anything else is the display GPU's layout and can only be flipped.
-+	bool tiled = false;
-+	if (modifier == kModInvalid) {
-+		char exporter[32];
-+		vExporterOf(fds[0], exporter);
-+		tiled = strcmp(exporter, sRenderDriver) == 0;
-+	}
-+	if (tiled && !sFlipEnabled)
++	// LINEAR is mapped and read as rows. INVALID is the device's own layout,
++	// which gbm detiles.
++	const bool own = modifier == kModInvalid;
++	if (own && sGbm == NULL)
 +		return NULL;
 +
 +	struct stat st;
 +	size_t need = (size_t)offsets[0] + (size_t)strides[0] * height;
-+	if (fstat(fds[0], &st) < 0 || (size_t)st.st_size < need)
++	if (!own && (fstat(fds[0], &st) < 0 || (size_t)st.st_size < need))
 +		return NULL;
 +
++	struct gbm_bo* bo = NULL;
 +	void* map = NULL;
-+	if (tiled) {
-+		// Copies show this buffer blank; the server shows it in place.
-+		map = calloc(1, need);
++	if (own) {
++		struct gbm_import_fd_modifier_data data;
++		memset(&data, 0, sizeof(data));
++		data.width = width;
++		data.height = height;
++		data.format = depth == 32 ? GBM_FORMAT_ARGB8888 : GBM_FORMAT_XRGB8888;
++		data.num_fds = 1;
++		data.fds[0] = fds[0];
++		data.strides[0] = (int)strides[0];
++		data.offsets[0] = (int)offsets[0];
++		data.modifier = kModInvalid;
++		bo = gbm_bo_import(sGbm, GBM_BO_IMPORT_FD_MODIFIER, &data,
++			GBM_BO_USE_RENDERING);
++		if (bo == NULL)
++			return NULL;
++		map = calloc(1, (size_t)width * 4 * height);
 +	} else {
 +		map = mmap(NULL, need, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
 +		if (map == MAP_FAILED)
 +			map = NULL;
 +	}
-+	if (map == NULL)
++	if (map == NULL) {
++		if (bo != NULL)
++			gbm_bo_destroy(bo);
 +		return NULL;
-+	#define V_UNMAP() do { if (tiled) free(map); else munmap(map, need); } while (0)
++	}
 +
 +	PixmapPtr pix = fbCreatePixmap(screen, 0, 0, depth, 0);
-+	if (pix == NULL) {
-+		V_UNMAP();
-+		return NULL;
++	int dup = -1;
++	if (pix != NULL) {
++		if (own) {
++			if ((*screen->ModifyPixmapHeader)(pix, width, height, depth, bpp,
++					width * 4, map))
++				dup = fcntl(fds[0], F_DUPFD_CLOEXEC, 3);
++		} else if ((*screen->ModifyPixmapHeader)(pix, width, height, depth,
++				bpp, strides[0], (char*)map + offsets[0])) {
++			dup = fcntl(fds[0], F_DUPFD_CLOEXEC, 3);
++		}
 +	}
-+	if (!(*screen->ModifyPixmapHeader)(pix, width, height, depth, bpp,
-+			strides[0], (char*)map + offsets[0])) {
-+		(*screen->DestroyPixmap)(pix);
-+		V_UNMAP();
-+		return NULL;
-+	}
-+
-+	int dup = fcntl(fds[0], F_DUPFD_CLOEXEC, 3);
 +	if (dup < 0) {
-+		(*screen->DestroyPixmap)(pix);
-+		V_UNMAP();
++		if (pix != NULL)
++			(*screen->DestroyPixmap)(pix);
++		if (bo != NULL)
++			gbm_bo_destroy(bo);
++		if (own)
++			free(map);
++		else
++			munmap(map, need);
 +		return NULL;
 +	}
 +
 +	VDmabuf* buf = vDmabuf(pix);
 +	buf->fd = dup;
-+	buf->map = tiled ? NULL : map;
++	buf->map = own ? NULL : map;
 +	buf->mapSize = need;
 +	buf->offset = offsets[0];
-+	buf->tiled = tiled;
++	buf->stride = strides[0];
++	buf->bo = bo;
++	buf->copy = own ? map : NULL;
++	buf->width = width;
++	buf->height = height;
 +	buf->flipWindow = 0;
 +	buf->syncing = false;
-+	if (tiled) {
-+		// The pages live in the pixmap's own storage until it is freed.
-+		pix->devPrivate.ptr = (char*)map + offsets[0];
-+		buf->map = NULL;
-+		buf->shadow = map;
++	if (own) {
++		vBoRefresh(buf);
 +	} else {
 +		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
 +		buf->syncing = true;
-+		vTrackImport(buf, true);
 +	}
-+	#undef V_UNMAP
++	vTrackImport(buf, true);
 +	return pix;
 +}
-+
-+
 +static int
 +vFdsFromPixmap(ScreenPtr /*screen*/, PixmapPtr pix, int* fds,
 +	uint32_t* strides, uint32_t* offsets, uint64_t* modifier)
@@ -6607,8 +6643,9 @@ new file mode 100644
 +	while (fd < 0 && (entry = readdir(dir)) != NULL) {
 +		if (strncmp(entry->d_name, "renderD", 7) != 0)
 +			continue;
-+		snprintf(path, sizeof(path), "/dev/dri/%s", entry->d_name);
-+		fd = open(path, O_RDWR | O_CLOEXEC);
++		snprintf(sRenderPath, sizeof(sRenderPath), "/dev/dri/%s",
++			entry->d_name);
++		fd = open(sRenderPath, O_RDWR | O_CLOEXEC);
 +	}
 +	closedir(dir);
 +	return fd;
@@ -6628,27 +6665,6 @@ new file mode 100644
 +	for (int card = 0; fd < 0 && card < 8; card++)
 +		fd = vOpenRenderOf(card);
 +	return fd;
-+}
-+
-+
-+// Kernel driver of an open render node.
-+static void
-+vNodeDriver(int fd, char* name, size_t size)
-+{
-+	name[0] = '\0';
-+	struct stat st;
-+	if (fstat(fd, &st) < 0)
-+		return;
-+	char path[128];
-+	char link[128];
-+	snprintf(path, sizeof(path), "/sys/dev/char/%u:%u/device/driver",
-+		major(st.st_rdev), minor(st.st_rdev));
-+	ssize_t length = readlink(path, link, sizeof(link) - 1);
-+	if (length <= 0)
-+		return;
-+	link[length] = '\0';
-+	const char* base = strrchr(link, '/');
-+	snprintf(name, size, "%s", base != NULL ? base + 1 : link);
 +}
 +
 +
@@ -6693,19 +6709,17 @@ new file mode 100644
 +	if (!dixRegisterPrivateKey(&sDmabufKey, PRIVATE_PIXMAP, sizeof(VDmabuf))
 +		|| !RegisterBlockAndWakeupHandlers(vDmabufBlock, vDmabufWakeup,
 +			NULL)) {
-+		close(sRenderFd);
-+		sRenderFd = -1;
++		vCloseRender();
 +		return;
 +	}
 +
-+	vNodeDriver(sRenderFd, sRenderDriver, sizeof(sRenderDriver));
++	sGbm = gbm_create_device(sRenderFd);
 +	const char* noFlip = getenv("XVITR_NO_FLIP");
 +	sFlipEnabled = (noFlip == NULL || atoi(noFlip) == 0) && vPortsCarryFds();
 +
 +	// FenceFromFD needs the shm fence screen funcs, else BadMatch.
 +	if (!miSyncShmScreenInit(screen)) {
-+		close(sRenderFd);
-+		sRenderFd = -1;
++		vCloseRender();
 +		return;
 +	}
 +
@@ -6719,8 +6733,7 @@ new file mode 100644
 +	sDri3Info.get_drawable_modifiers = vGetDrawableModifiers;
 +
 +	if (!dri3_screen_init(screen, &sDri3Info)) {
-+		close(sRenderFd);
-+		sRenderFd = -1;
++		vCloseRender();
 +		return;
 +	}
 +
