@@ -1816,7 +1816,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,230 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2006,6 +2006,8 @@ new file mode 100644
 +void			VSyncWindowFrame(VWindowPriv* priv);
 +void			VUploadWindowDamage(VWindowPriv* priv, int x1, int y1,
 +				int x2, int y2);
++void			VUploadWindowRegion(VWindowPriv* priv, const BoxRec* rects,
++				int n, int dx, int dy);
 +WindowPtr		VWindowForId(uint32 id);
 +void			VWindowSetTeam(uint32 windowId, team_id team);
 +void			VWindowAttribute(WindowPtr pWin);
@@ -2440,7 +2442,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1495 @@
+@@ -0,0 +1,1508 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2465,6 +2467,7 @@ new file mode 100644
 +#include <Point.h>
 +#include <Deskbar.h>
 +#include <Rect.h>
++#include <Region.h>
 +#include <Screen.h>
 +#include <String.h>
 +#include <Surface.h>
@@ -2997,11 +3000,8 @@ new file mode 100644
 +		WindowPtr pWin = vLookupWindow(priv->xWindow);
 +		if (pWin != NULL && priv->surface != NULL && priv->mapped
 +			&& rects != NULL && nRects > 0) {
-+			int dx = pWin->drawable.x;
-+			int dy = pWin->drawable.y;
-+			for (int i = 0; i < nRects; i++)
-+				VUploadWindowDamage(priv, rects[i].x1 + dx, rects[i].y1 + dy,
-+					rects[i].x2 + dx, rects[i].y2 + dy);
++			VUploadWindowRegion(priv, rects, nRects, pWin->drawable.x,
++				pWin->drawable.y);
 +		}
 +
 +		DamageEmpty(damage);
@@ -3026,11 +3026,14 @@ new file mode 100644
 +
 +
 +void
-+VUploadWindowDamage(VWindowPriv* priv, int x1, int y1, int x2, int y2)
++VUploadWindowRegion(VWindowPriv* priv, const BoxRec* rects, int n, int dx,
++	int dy)
 +{
-+	if (priv == NULL || priv->surface == NULL || gVScreen == NULL)
++	if (priv == NULL || priv->surface == NULL || gVScreen == NULL
++		|| rects == NULL || n <= 0)
 +		return;
 +
++	// Buffer() can change after Present(): fetch it once per flush.
 +	BBitmap* buffer = priv->surface->Buffer();
 +	if (buffer == NULL)
 +		return;
@@ -3052,16 +3055,6 @@ new file mode 100644
 +	int32 srcOffX = pix->screen_x;
 +	int32 srcOffY = pix->screen_y;
 +
-+	x1 = vMaxI(vMaxI(x1, offX), srcOffX);
-+	y1 = vMaxI(vMaxI(y1, offY), srcOffY);
-+	x2 = vMinI(vMinI(x2, offX + bw), srcOffX + (int32)pix->drawable.width);
-+	y2 = vMinI(vMinI(y2, offY + bh), srcOffY + (int32)pix->drawable.height);
-+
-+	int32 width = x2 - x1;
-+	int32 height = y2 - y1;
-+	if (width <= 0 || height <= 0)
-+		return;
-+
 +	int32 srcStride = pix->devKind;
 +	uint8* srcBase = (uint8*)pix->devPrivate.ptr;
 +	int32 dstStride = buffer->BytesPerRow();
@@ -3069,26 +3062,48 @@ new file mode 100644
 +	if (dstBase == NULL)
 +		return;
 +
-+	for (int32 y = 0; y < height; y++) {
-+		memcpy(dstBase + (int64)(y1 - offY + y) * dstStride
-+				+ (int64)(x1 - offX) * 4,
-+			srcBase + (int64)(y1 - srcOffY + y) * srcStride
-+				+ (int64)(x1 - srcOffX) * 4,
-+			(size_t)width * 4);
++	BRegion region;
++	for (int i = 0; i < n; i++) {
++		int32 x1 = vMaxI(vMaxI(rects[i].x1 + dx, offX), srcOffX);
++		int32 y1 = vMaxI(vMaxI(rects[i].y1 + dy, offY), srcOffY);
++		int32 x2 = vMinI(vMinI(rects[i].x2 + dx, offX + bw),
++			srcOffX + (int32)pix->drawable.width);
++		int32 y2 = vMinI(vMinI(rects[i].y2 + dy, offY + bh),
++			srcOffY + (int32)pix->drawable.height);
 +
-+		// X leaves alpha at 0, which the compositor would treat as clear.
-+		uint32* row = (uint32*)(dstBase + (int64)(y1 - offY + y) * dstStride
-+			+ (int64)(x1 - offX) * 4);
-+		for (int32 i = 0; i < width; i++)
-+			row[i] |= 0xff000000;
++		int32 width = x2 - x1;
++		int32 height = y2 - y1;
++		if (width <= 0 || height <= 0)
++			continue;
++
++		for (int32 y = 0; y < height; y++) {
++			memcpy(dstBase + (int64)(y1 - offY + y) * dstStride
++					+ (int64)(x1 - offX) * 4,
++				srcBase + (int64)(y1 - srcOffY + y) * srcStride
++					+ (int64)(x1 - srcOffX) * 4,
++				(size_t)width * 4);
++
++			// X leaves alpha at 0, which the compositor would treat as clear.
++			uint32* row = (uint32*)(dstBase
++				+ (int64)(y1 - offY + y) * dstStride + (int64)(x1 - offX) * 4);
++			for (int32 i = 0; i < width; i++)
++				row[i] |= 0xff000000;
++		}
++
++		region.Include(BRect(x1 - offX, y1 - offY, x2 - offX - 1,
++			y2 - offY - 1));
 +	}
 +
-+	x1 -= offX;
-+	x2 -= offX;
-+	y1 -= offY;
-+	y2 -= offY;
++	if (region.CountRects() > 0)
++		priv->surface->Present(region);
++}
 +
-+	priv->surface->Present(BRect(x1, y1, x2 - 1, y2 - 1));
++
++void
++VUploadWindowDamage(VWindowPriv* priv, int x1, int y1, int x2, int y2)
++{
++	BoxRec box = { (short)x1, (short)y1, (short)x2, (short)y2 };
++	VUploadWindowRegion(priv, &box, 1, 0, 0);
 +}
 +
 +
