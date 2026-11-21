@@ -6048,7 +6048,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,894 @@
+@@ -0,0 +1,913 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -6207,27 +6207,41 @@ new file mode 100644
 +}
 +
 +
-+// Detiles the device's layout into the pixmap storage.
++// Detiles a rectangle of the device's layout into the pixmap storage.
 +static void
-+vBoRefresh(VDmabuf* buf)
++vBoRefresh(VDmabuf* buf, int x1, int y1, int x2, int y2)
 +{
++	x1 = x1 < 0 ? 0 : x1;
++	y1 = y1 < 0 ? 0 : y1;
++	x2 = x2 > buf->width ? buf->width : x2;
++	y2 = y2 > buf->height ? buf->height : y2;
++	if (x1 >= x2 || y1 >= y2)
++		return;
++
 +	uint32_t stride = 0;
 +	void* data = NULL;
-+	char* src = (char*)gbm_bo_map(buf->bo, 0, 0, buf->width, buf->height,
++	char* src = (char*)gbm_bo_map(buf->bo, x1, y1, x2 - x1, y2 - y1,
 +		GBM_BO_TRANSFER_READ, &stride, &data);
 +	if (src == NULL)
 +		return;
-+	for (int y = 0; y < buf->height; y++) {
-+		memcpy((char*)buf->copy + (size_t)y * buf->width * 4,
-+			src + (size_t)y * stride, (size_t)buf->width * 4);
++	for (int y = 0; y < y2 - y1; y++) {
++		memcpy((char*)buf->copy + ((size_t)(y1 + y) * buf->width + x1) * 4,
++			src + (size_t)y * stride, (size_t)(x2 - x1) * 4);
 +	}
 +	gbm_bo_unmap(buf->bo, data);
 +}
 +
 +
++static void
++vBoRefresh(VDmabuf* buf)
++{
++	vBoRefresh(buf, 0, 0, buf->width, buf->height);
++}
++
++
 +// Present copies from the client pixmap inside requests, with no hook to
-+// bracket it. Keep a read window open per imported buffer and renew it
-+// each loop so the next batch of copies sees fresh GPU writes.
++// bracket it. Keep a read window open per linear buffer and renew it each
++// loop. Device-layout buffers are detiled only when X is about to read them.
 +static void vFlipPoll(void* timeout);
 +
 +
@@ -6237,11 +6251,8 @@ new file mode 100644
 +	vFlipPoll(timeout);
 +	for (int i = 0; i < sImportedCount; i++) {
 +		VDmabuf* buf = sImported[i];
-+		if (buf->bo != NULL) {
-+			if (buf->flipWindow == 0)
-+				vBoRefresh(buf);
++		if (buf->bo != NULL)
 +			continue;
-+		}
 +		if (buf->syncing)
 +			vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 +		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
@@ -6451,7 +6462,8 @@ new file mode 100644
 +
 +
 +// A declined flip is copied by Present right after. Wait for the client's
-+// writes now: the per-loop read window predates this frame.
++// writes now: the per-loop read window predates this frame. Detile only
++// the presented region.
 +static Bool
 +vWindowFlip(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
 +	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence)
@@ -6462,8 +6474,15 @@ new file mode 100644
 +	VDmabuf* buf = vDmabuf(pixmap);
 +	if (buf->fd > 0) {
 +		if (buf->bo != NULL) {
-+			if (buf->flipWindow == 0)
-+				vBoRefresh(buf);
++			if (buf->flipWindow == 0) {
++				if (update == NULL)
++					vBoRefresh(buf);
++				else {
++					BoxPtr e = RegionExtents(update);
++					vBoRefresh(buf, e->x1 - xOff, e->y1 - yOff,
++						e->x2 - xOff, e->y2 - yOff);
++				}
++			}
 +		} else {
 +			if (buf->syncing)
 +				vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
