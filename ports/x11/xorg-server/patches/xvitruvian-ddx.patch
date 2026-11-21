@@ -2624,7 +2624,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1648 @@
+@@ -0,0 +1,1655 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -3385,18 +3385,25 @@ new file mode 100644
 +		if (width <= 0 || height <= 0)
 +			continue;
 +
-+		for (int32 y = 0; y < height; y++) {
-+			memcpy(dstBase + (int64)(y1 - offY + y) * dstStride
-+					+ (int64)(x1 - offX) * 4,
-+				srcBase + (int64)(y1 - srcOffY + y) * srcStride
-+					+ (int64)(x1 - srcOffX) * 4,
-+				(size_t)width * 4);
++		uint8* dst = dstBase + (int64)(y1 - offY) * dstStride
++			+ (int64)(x1 - offX) * 4;
++		const uint8* src = srcBase + (int64)(y1 - srcOffY) * srcStride
++			+ (int64)(x1 - srcOffX) * 4;
++		if (srcStride == dstStride && (size_t)width * 4 == (size_t)dstStride)
++			memcpy(dst, src, (size_t)dstStride * height);
++		else {
++			for (int32 y = 0; y < height; y++)
++				memcpy(dst + (int64)y * dstStride,
++					src + (int64)y * srcStride, (size_t)width * 4);
++		}
 +
-+			// X leaves alpha at 0, which the compositor would treat as clear.
-+			uint32* row = (uint32*)(dstBase
-+				+ (int64)(y1 - offY + y) * dstStride + (int64)(x1 - offX) * 4);
-+			for (int32 i = 0; i < width; i++)
-+				row[i] |= 0xff000000;
++		// The chain is XRGB: alpha is ignored for opaque windows.
++		if (pWin->drawable.depth != 24) {
++			for (int32 y = 0; y < height; y++) {
++				uint32* row = (uint32*)(dst + (int64)y * dstStride);
++				for (int32 i = 0; i < width; i++)
++					row[i] |= 0xff000000;
++			}
 +		}
 +
 +		region.Include(BRect(x1 - offX, y1 - offY, x2 - offX - 1,
