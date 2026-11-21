@@ -921,7 +921,7 @@ diff --git a/hw/vitruvian/vInput.cpp b/hw/vitruvian/vInput.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInput.cpp
-@@ -0,0 +1,907 @@
+@@ -0,0 +1,969 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1040,31 +1040,42 @@ new file mode 100644
 +}
 +
 +
++// The locks X has. Every key reaches X through vHandleKey, so this follows
++// X exactly; native toggles locks X never sees (a press in a native window,
++// the Keymap preflet, the LEDs at login).
++static uint32 sXLocks = 0;
++
++
 +static BLocker sRoleLock("xv roles");
 +static char sRoleOptions[64];
 +
 +
-+// Application thread: reads the Ctrl/Alt roles from input_server (never
-+// from the X thread) and caches the matching xkb option. Linux mode needs
-+// none; classic mode swaps Alt and Ctrl for X clients.
++// Application thread: reads the modifier roles from input_server (never
++// from the X thread) and caches the xkb option input_server's own xkb
++// state uses for them (look_up_xkb_modifier_options()).
 +void
 +VKeymapRefresh()
 +{
-+	uint32 command = 0;
-+	uint32 control = 0;
 +	char options[sizeof(sRoleOptions)] = "";
-+	if (get_modifier_key(B_LEFT_COMMAND_KEY, &command) == B_OK
-+		&& get_modifier_key(B_LEFT_CONTROL_KEY, &control) == B_OK
-+		&& command == 0x5d && control == 0x5c) {
-+		strlcpy(options, "ctrl:swap_lalt_lctl", sizeof(options));
++	key_map* map = NULL;
++	char* chars = NULL;
++	get_key_map(&map, &chars);
++	if (map != NULL) {
++		if (map->left_command_key == 0x5c && map->left_control_key == 0x5d)
++			strlcpy(options, "ctrl:swap_lalt_lctl", sizeof(options));
++		else if (map->left_command_key == 0x66 && map->left_option_key == 0x5d)
++			strlcpy(options, "altwin:swap_alt_win", sizeof(options));
 +	}
++	free(map);
++	free(chars);
 +
 +	BAutolock locker(sRoleLock);
 +	strlcpy(sRoleOptions, options, sizeof(sRoleOptions));
 +}
 +
 +
-+// Appends the role option to the layout's options unless already there.
++// Replaces any role option in the layout's options with the current one:
++// the cache keeps the swap from the last time it was written.
 +static void
 +vMergeRoleOptions(char* options, size_t size)
 +{
@@ -1073,6 +1084,20 @@ new file mode 100644
 +		BAutolock locker(sRoleLock);
 +		strlcpy(role, sRoleOptions, sizeof(role));
 +	}
++
++	char kept[256] = "";
++	for (const char* p = options; *p != '\0';) {
++		size_t length = strcspn(p, ",");
++		if (length > 0 && strncmp(p, "ctrl:swap_lalt_lctl", length) != 0
++			&& strncmp(p, "altwin:swap_alt_win", length) != 0) {
++			if (kept[0] != '\0')
++				strlcat(kept, ",", sizeof(kept));
++			size_t room = sizeof(kept) - strlen(kept) - 1;
++			strncat(kept, p, length < room ? length : room);
++		}
++		p += length + (p[length] == ',' ? 1 : 0);
++	}
++	strlcpy(options, kept, size);
 +	if (role[0] == '\0')
 +		return;
 +
@@ -1254,6 +1279,11 @@ new file mode 100644
 +			XkbDeviceApplyKeymap(sSlaves[i].device, desc);
 +	}
 +	XkbFreeKeyboard(desc, XkbAllComponentsMask, TRUE);
++
++	// The new keymap may reset the locks; follow what X has now.
++	XkbSrvInfoPtr xkbi = inputInfo.keyboard->key->xkbInfo;
++	sXLocks = ((xkbi->state.locked_mods & LockMask) != 0 ? B_CAPS_LOCK : 0)
++		| ((xkbi->state.locked_mods & Mod2Mask) != 0 ? B_NUM_LOCK : 0);
 +}
 +
 +
@@ -1417,6 +1447,26 @@ new file mode 100644
 +}
 +
 +
++static const int32 kEvdevCapsLock = 58;
++static const int32 kEvdevNumLock = 69;
++
++// Caller holds the input lock.
++static void
++vSyncLocks(DeviceIntPtr dev, uint32 modifiers)
++{
++	static const struct { uint32 lock; int32 code; } kLocks[] = {
++		{ B_CAPS_LOCK, kEvdevCapsLock }, { B_NUM_LOCK, kEvdevNumLock }
++	};
++	for (size_t i = 0; i < sizeof(kLocks) / sizeof(kLocks[0]); i++) {
++		if (((modifiers ^ sXLocks) & kLocks[i].lock) == 0)
++			continue;
++		QueueKeyboardEvents(dev, KeyPress, kLocks[i].code + 8);
++		QueueKeyboardEvents(dev, KeyRelease, kLocks[i].code + 8);
++		sXLocks ^= kLocks[i].lock;
++	}
++}
++
++
 +static void
 +vHandleKey(const BMessage& msg)
 +{
@@ -1456,8 +1506,20 @@ new file mode 100644
 +			return;
 +	}
 +
++	if (keycode > 255)
++		return;
++
++	// A held lock key repeats; only the first press toggles.
++	bool lockKey = evdevCode == kEvdevCapsLock || evdevCode == kEvdevNumLock;
++	if (lockKey && type == KeyPress && msg.GetInt32("be:key_repeat", 0) > 1)
++		return;
++
 +	input_lock();
++	if (!lockKey && type == KeyPress)
++		vSyncLocks(dev, (uint32)msg.GetInt32("modifiers", 0));
 +	QueueKeyboardEvents(dev, type, keycode);
++	if (lockKey && type == KeyPress)
++		sXLocks ^= evdevCode == kEvdevCapsLock ? B_CAPS_LOCK : B_NUM_LOCK;
 +	input_unlock();
 +	vPokeEQ();
 +}
