@@ -6,7 +6,7 @@ diff --git a/hw/vitruvian/vInit.cpp b/hw/vitruvian/vInit.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInit.cpp
-@@ -0,0 +1,907 @@
+@@ -0,0 +1,910 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -691,6 +691,9 @@ new file mode 100644
 +	if (!miPointerInitialize(pScreen, &vSpriteFuncs, &vPointerCursorFuncs,
 +			FALSE))
 +		return FALSE;
++
++	// After the window wraps above, so Present chains onto them.
++	VInitDri3Present(pScreen);
 +
 +	return TRUE;
 +}
@@ -1816,7 +1819,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,231 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2008,6 +2011,7 @@ new file mode 100644
 +				int x2, int y2);
 +void			VUploadWindowRegion(VWindowPriv* priv, const BoxRec* rects,
 +				int n, int dx, int dy);
++void			VInitDri3Present(ScreenPtr screen);
 +WindowPtr		VWindowForId(uint32 id);
 +void			VWindowSetTeam(uint32 windowId, team_id team);
 +void			VWindowAttribute(WindowPtr pWin);
@@ -5714,4 +5718,353 @@ new file mode 100644
 +		return true;
 +	}
 +	return false;
++}
+diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
+new file mode 100644
+--- /dev/null
++++ b/hw/vitruvian/vDri3.cpp
+@@ -0,0 +1,344 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++
++// DRI3 import of linear dma-buf pixmaps and Present. Clients render into
++// their own buffers; Present copies the imported pixmap into the window
++// pixmap, which then goes out through the normal damage upload.
++
++#ifdef HAVE_DIX_CONFIG_H
++#include <dix-config.h>
++#endif
++
++#include "vPriv.h"
++
++#include <dirent.h>
++#include <errno.h>
++#include <fcntl.h>
++#include <linux/dma-buf.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <sys/ioctl.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#define class class_
++#define public public_
++extern "C" {
++#ifdef DRI3
++#include "dri3.h"
++#endif
++#ifdef PRESENT
++#include "present.h"
++#endif
++}
++#undef public
++#undef class
++
++#ifdef DRI3
++
++static const uint32_t kFormatXRGB8888 = 0x34325258;
++static const uint32_t kFormatARGB8888 = 0x34325241;
++static const uint64_t kModLinear = 0;
++
++struct VDmabuf {
++	int		fd;
++	void*	map;
++	size_t	mapSize;
++	bool	syncing;
++};
++
++static DevPrivateKeyRec sDmabufKey;
++static int sRenderFd = -1;
++static DestroyPixmapProcPtr sDestroyPixmap = NULL;
++static VDmabuf** sImported = NULL;
++static int sImportedCount = 0;
++
++static VDmabuf*
++vDmabuf(PixmapPtr pix)
++{
++	return (VDmabuf*)dixGetPrivateAddr(&pix->devPrivates, &sDmabufKey);
++}
++
++
++static void
++vDmabufSync(VDmabuf* buf, uint64_t flags)
++{
++	struct dma_buf_sync sync;
++	sync.flags = flags;
++	while (ioctl(buf->fd, DMA_BUF_IOCTL_SYNC, &sync) < 0 && errno == EINTR)
++		;
++}
++
++
++static void
++vTrackImport(VDmabuf* buf, bool add)
++{
++	if (add) {
++		VDmabuf** list = (VDmabuf**)realloc(sImported,
++			sizeof(VDmabuf*) * (sImportedCount + 1));
++		if (list == NULL)
++			return;
++		sImported = list;
++		sImported[sImportedCount++] = buf;
++		return;
++	}
++	for (int i = 0; i < sImportedCount; i++) {
++		if (sImported[i] == buf) {
++			sImported[i] = sImported[--sImportedCount];
++			break;
++		}
++	}
++}
++
++
++// Present copies from the client pixmap inside requests, with no hook to
++// bracket it. Keep a read window open per imported buffer and renew it
++// each loop so the next batch of copies sees fresh GPU writes.
++static void
++vDmabufBlock(void* /*data*/, void* /*timeout*/)
++{
++	for (int i = 0; i < sImportedCount; i++) {
++		VDmabuf* buf = sImported[i];
++		if (buf->syncing)
++			vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
++		buf->syncing = true;
++	}
++}
++
++
++static void
++vDmabufWakeup(void* /*data*/, int /*result*/)
++{
++}
++
++
++static Bool
++vDestroyPixmap(PixmapPtr pix)
++{
++	if (pix->refcnt == 1) {
++		VDmabuf* buf = vDmabuf(pix);
++		if (buf->map != NULL) {
++			vTrackImport(buf, false);
++			if (buf->syncing)
++				vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++			munmap(buf->map, buf->mapSize);
++			close(buf->fd);
++			buf->map = NULL;
++		}
++	}
++	return (*sDestroyPixmap)(pix);
++}
++
++
++static int
++vOpenClient(ClientPtr /*client*/, ScreenPtr /*screen*/,
++	RRProviderPtr /*provider*/, int* fd)
++{
++	int dup = fcntl(sRenderFd, F_DUPFD_CLOEXEC, 3);
++	if (dup < 0)
++		return BadAlloc;
++	*fd = dup;
++	return Success;
++}
++
++
++static int
++vOpen(ScreenPtr screen, RRProviderPtr provider, int* fd)
++{
++	return vOpenClient(NULL, screen, provider, fd);
++}
++
++
++static PixmapPtr
++vPixmapFromFds(ScreenPtr screen, CARD8 numFds, const int* fds, CARD16 width,
++	CARD16 height, const CARD32* strides, const CARD32* offsets, CARD8 depth,
++	CARD8 bpp, CARD64 modifier)
++{
++	if (numFds != 1 || bpp != 32 || (depth != 24 && depth != 32)
++		|| modifier != kModLinear	// an implicit layout may be tiled
++		|| width == 0 || height == 0 || strides[0] < (CARD32)width * 4)
++		return NULL;
++
++	struct stat st;
++	size_t need = (size_t)offsets[0] + (size_t)strides[0] * height;
++	if (fstat(fds[0], &st) < 0 || (size_t)st.st_size < need)
++		return NULL;
++
++	void* map = mmap(NULL, need, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0],
++		0);
++	if (map == MAP_FAILED)
++		return NULL;
++
++	PixmapPtr pix = fbCreatePixmap(screen, 0, 0, depth, 0);
++	if (pix == NULL) {
++		munmap(map, need);
++		return NULL;
++	}
++	if (!(*screen->ModifyPixmapHeader)(pix, width, height, depth, bpp,
++			strides[0], (char*)map + offsets[0])) {
++		(*screen->DestroyPixmap)(pix);
++		munmap(map, need);
++		return NULL;
++	}
++
++	int dup = fcntl(fds[0], F_DUPFD_CLOEXEC, 3);
++	if (dup < 0) {
++		(*screen->DestroyPixmap)(pix);
++		munmap(map, need);
++		return NULL;
++	}
++
++	VDmabuf* buf = vDmabuf(pix);
++	buf->fd = dup;
++	buf->map = map;
++	buf->mapSize = need;
++	buf->syncing = false;
++	vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
++	buf->syncing = true;
++	vTrackImport(buf, true);
++	return pix;
++}
++
++
++static int
++vFdsFromPixmap(ScreenPtr /*screen*/, PixmapPtr pix, int* fds,
++	uint32_t* strides, uint32_t* offsets, uint64_t* modifier)
++{
++	VDmabuf* buf = vDmabuf(pix);
++	if (buf->map == NULL)
++		return 0;
++	int dup = fcntl(buf->fd, F_DUPFD_CLOEXEC, 3);
++	if (dup < 0)
++		return 0;
++	fds[0] = dup;
++	strides[0] = pix->devKind;
++	offsets[0] = (uint32_t)((char*)pix->devPrivate.ptr - (char*)buf->map);
++	*modifier = kModLinear;
++	return 1;
++}
++
++
++static Bool
++vGetFormats(ScreenPtr /*screen*/, CARD32* count, CARD32** formats)
++{
++	CARD32* list = (CARD32*)malloc(2 * sizeof(CARD32));
++	if (list == NULL)
++		return FALSE;
++	list[0] = kFormatXRGB8888;
++	list[1] = kFormatARGB8888;
++	*count = 2;
++	*formats = list;
++	return TRUE;
++}
++
++
++static Bool
++vModifiers(uint32_t format, uint32_t* count, uint64_t** modifiers)
++{
++	if (format != kFormatXRGB8888 && format != kFormatARGB8888)
++		return FALSE;
++	uint64_t* list = (uint64_t*)malloc(sizeof(uint64_t));
++	if (list == NULL)
++		return FALSE;
++	list[0] = kModLinear;
++	*count = 1;
++	*modifiers = list;
++	return TRUE;
++}
++
++
++static Bool
++vGetModifiers(ScreenPtr /*screen*/, uint32_t format, uint32_t* count,
++	uint64_t** modifiers)
++{
++	return vModifiers(format, count, modifiers);
++}
++
++
++static Bool
++vGetDrawableModifiers(DrawablePtr /*draw*/, uint32_t format, uint32_t* count,
++	uint64_t** modifiers)
++{
++	return vModifiers(format, count, modifiers);
++}
++
++
++static int
++vOpenRenderNode()
++{
++	DIR* dir = opendir("/dev/dri");
++	if (dir == NULL)
++		return -1;
++	int fd = -1;
++	while (fd < 0) {
++		struct dirent* entry = readdir(dir);
++		if (entry == NULL)
++			break;
++		if (strncmp(entry->d_name, "renderD", 7) != 0)
++			continue;
++		char path[300];
++		snprintf(path, sizeof(path), "/dev/dri/%s", entry->d_name);
++		fd = open(path, O_RDWR | O_CLOEXEC);
++	}
++	closedir(dir);
++	return fd;
++}
++
++
++static dri3_screen_info_rec sDri3Info;
++
++static void
++vInitDri3(ScreenPtr screen)
++{
++	sRenderFd = vOpenRenderNode();
++	if (sRenderFd < 0) {
++		LogMessage(X_INFO, "vitruvian: no render node, DRI3 disabled\n");
++		return;
++	}
++
++	if (!dixRegisterPrivateKey(&sDmabufKey, PRIVATE_PIXMAP, sizeof(VDmabuf))
++		|| !RegisterBlockAndWakeupHandlers(vDmabufBlock, vDmabufWakeup,
++			NULL)) {
++		close(sRenderFd);
++		sRenderFd = -1;
++		return;
++	}
++
++	sDri3Info.version = DRI3_SCREEN_INFO_VERSION;
++	sDri3Info.open = vOpen;
++	sDri3Info.open_client = vOpenClient;
++	sDri3Info.pixmap_from_fds = vPixmapFromFds;
++	sDri3Info.fds_from_pixmap = vFdsFromPixmap;
++	sDri3Info.get_formats = vGetFormats;
++	sDri3Info.get_modifiers = vGetModifiers;
++	sDri3Info.get_drawable_modifiers = vGetDrawableModifiers;
++
++	if (!dri3_screen_init(screen, &sDri3Info)) {
++		close(sRenderFd);
++		sRenderFd = -1;
++		return;
++	}
++
++	sDestroyPixmap = screen->DestroyPixmap;
++	screen->DestroyPixmap = vDestroyPixmap;
++}
++
++#endif	// DRI3
++
++
++void
++VInitDri3Present(ScreenPtr screen)
++{
++#ifdef DRI3
++	vInitDri3(screen);
++#endif
++#ifdef PRESENT
++	if (!present_screen_init(screen, NULL))
++		LogMessage(X_WARNING, "vitruvian: Present init failed\n");
++#endif
 +}

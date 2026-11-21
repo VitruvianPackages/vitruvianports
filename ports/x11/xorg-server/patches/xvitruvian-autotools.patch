@@ -82,10 +82,9 @@ index 1749018..06c1766 100644
  	$(AM_V_at)for i in $(SUBDIRS) ; do $(MAKE) -C $$i relink || exit 1 ; done
 diff --git a/hw/vitruvian/Makefile.am b/hw/vitruvian/Makefile.am
 new file mode 100644
-index 0000000..14c2656
 --- /dev/null
 +++ b/hw/vitruvian/Makefile.am
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,50 @@
 +bin_PROGRAMS = Xvitr
 +
 +dist_bin_SCRIPTS = xvitruvian-session.sh
@@ -94,6 +93,8 @@ index 0000000..14c2656
 +# operator tokens would reject.
 +AM_CPPFLAGS = -DHAVE_DIX_CONFIG_H \
 +	-I$(top_srcdir)/composite \
++	-I$(top_srcdir)/dri3 \
++	-I$(top_srcdir)/present \
 +	-I/system/develop/headers/private \
 +	-I/system/develop/headers/private/app \
 +	-I/system/develop/headers/private/input \
@@ -110,6 +111,7 @@ index 0000000..14c2656
 +	vClipboard.cpp \
 +	vCursor.cpp \
 +	vDnd.cpp \
++	vDri3.cpp \
 +	vInit.cpp \
 +	vInput.cpp \
 +	vSettings.cpp \
