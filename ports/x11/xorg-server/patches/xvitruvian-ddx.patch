@@ -1981,7 +1981,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,248 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2062,6 +2062,8 @@ new file mode 100644
 +#include "opaque.h"
 +#include "os.h"
 +#include "xserver-properties.h"
++#include "misyncstr.h"
++#include "registry.h"
 +}
 +#undef public
 +#undef class
@@ -2106,6 +2108,11 @@ new file mode 100644
 +	bool		dirty;
 +	// Next flush uploads the whole window.
 +	bool		refill;
++	// Frame sync: when the client's frame counter was opened, and the
++	// value a resize waits to see change.
++	CARD32		frameOpenSince;
++	int64_t		syncBase;
++	bool		syncHold;
 +	// Shows a client buffer in place of the window pixmap.
 +	bool		flipped;
 +	bool		fullscreen;
@@ -2617,7 +2624,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1553 @@
+@@ -0,0 +1,1648 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -3155,6 +3162,79 @@ new file mode 100644
 +static VWindowPriv* sDirty[kMaxDirty];
 +static int sDirtyCount = 0;
 +static bool sHandlerRegistered = false;
++static OsTimerPtr sFrameTimer = NULL;
++
++
++// The counter resource type is private to the sync extension.
++static SyncCounter*
++vSyncCounterOf(WindowPtr pWin)
++{
++	static RESTYPE counterType = 0;
++	if (counterType == 0) {
++		for (RESTYPE t = 1; t < 128; t++) {
++			if (strcmp(LookupResourceName(t), "SyncCounter") == 0) {
++				counterType = t;
++				break;
++			}
++		}
++		if (counterType == 0)
++			return NULL;
++	}
++
++	PropertyPtr prop = NULL;
++	if (dixLookupProperty(&prop, pWin,
++			vAtom("_NET_WM_SYNC_REQUEST_COUNTER"), serverClient,
++			DixReadAccess) != Success || prop == NULL
++		|| prop->format != 32 || prop->size < 1)
++		return NULL;
++
++	// One id is the basic counter, two the extended pair.
++	XID id = ((CARD32*)prop->data)[prop->size > 1 ? 1 : 0];
++	void* counter = NULL;
++	if (dixLookupResourceByType(&counter, id, counterType, serverClient,
++			DixReadAccess) != Success)
++		return NULL;
++	return (SyncCounter*)counter;
++}
++
++
++// True while the client is drawing a frame (odd counter) or, after a
++// resize, has not yet answered it. A stuck client is shown after 100 ms.
++static bool
++vFrameOpen(VWindowPriv* priv, WindowPtr pWin)
++{
++	SyncCounter* counter = vSyncCounterOf(pWin);
++	if (counter == NULL) {
++		priv->syncHold = false;
++		priv->frameOpenSince = 0;
++		return false;
++	}
++
++	bool open = (counter->value & 1) != 0
++		|| (priv->syncHold && counter->value == priv->syncBase);
++	if (!open) {
++		priv->syncHold = false;
++		priv->frameOpenSince = 0;
++		return false;
++	}
++
++	CARD32 now = GetTimeInMillis();
++	if (priv->frameOpenSince == 0)
++		priv->frameOpenSince = now;
++	if (now - priv->frameOpenSince >= 100) {
++		priv->syncHold = false;
++		return false;
++	}
++	return true;
++}
++
++
++static CARD32
++vFrameWake(OsTimerPtr timer, CARD32 now, void* arg)
++{
++	// Waking the server runs the block handler, which retries.
++	return 0;
++}
 +
 +
 +static void
@@ -3190,12 +3270,21 @@ new file mode 100644
 +vFlushDamage(void* data, void* timeout)
 +{
 +	// Rendering for this request batch is complete by block time.
++	VWindowPriv* deferred[kMaxDirty];
++	int deferredCount = 0;
 +	while (sDirtyCount > 0) {
 +		VWindowPriv* priv = sDirty[--sDirtyCount];
 +		priv->dirty = false;
 +
 +		if (priv->damage == NULL)
 +			continue;
++
++		WindowPtr frameWin = vLookupWindow(priv->xWindow);
++		if (frameWin != NULL && priv->mapped && vFrameOpen(priv, frameWin)) {
++			priv->dirty = true;
++			deferred[deferredCount++] = priv;
++			continue;
++		}
 +
 +		DamagePtr damage = (DamagePtr)priv->damage;
 +		RegionPtr region = DamageRegion(damage);
@@ -3221,6 +3310,11 @@ new file mode 100644
 +
 +		DamageEmpty(damage);
 +	}
++
++	for (int i = 0; i < deferredCount; i++)
++		sDirty[sDirtyCount++] = deferred[i];
++	if (deferredCount > 0)
++		sFrameTimer = TimerSet(sFrameTimer, 0, 5, vFrameWake, NULL);
 +}
 +
 +
@@ -3881,6 +3975,7 @@ new file mode 100644
 +		"_NET_WM_WINDOW_TYPE_TOOLTIP",
 +		"_NET_WM_WINDOW_TYPE_COMBO",
 +		"_NET_WM_WINDOW_TYPE_DND",
++		"_NET_WM_SYNC_REQUEST",
 +	};
 +	Atom supported[sizeof(kSupported) / sizeof(kSupported[0])];
 +	for (size_t i = 0; i < sizeof(supported) / sizeof(supported[0]); i++)
@@ -4168,8 +4263,15 @@ new file mode 100644
 +	}
 +
 +	// The buffers are reallocated empty and the exposed area is undefined:
-+	// the client's redraw fills them, whole, at the next flush.
++	// the client's redraw fills them, whole, at the next flush, which
++	// waits for the client's next finished frame.
 +	priv->refill = true;
++	SyncCounter* counter = vSyncCounterOf(pWin);
++	if (counter != NULL) {
++		priv->syncBase = counter->value;
++		priv->syncHold = true;
++		priv->frameOpenSince = 0;
++	}
 +}
 diff --git a/hw/vitruvian/xvitruvian-session.sh b/hw/vitruvian/xvitruvian-session.sh
 new file mode 100644
