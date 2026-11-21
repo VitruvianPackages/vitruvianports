@@ -6,7 +6,7 @@ diff --git a/hw/vitruvian/vInit.cpp b/hw/vitruvian/vInit.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInit.cpp
-@@ -0,0 +1,942 @@
+@@ -0,0 +1,970 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -869,6 +869,30 @@ new file mode 100644
 +}
 +
 +
++// The X main thread can sit in a call to a dead app_server for good, so
++// SIGTERM alone is not enough.
++static int32
++vWatchAppServer(void*)
++{
++	bool seen = false;
++	for (;;) {
++		snooze(1000000);
++		bool running = be_roster->IsRunning("application/x-vnd.vos-app_server");
++		if (running) {
++			seen = true;
++			continue;
++		}
++		if (!seen)
++			continue;
++		ErrorF("XVitruvian: app_server is gone, exiting\n");
++		kill(getpid(), SIGTERM);
++		snooze(2000000);
++		_exit(1);
++	}
++	return 0;
++}
++
++
 +extern "C" void
 +InitOutput(ScreenInfo* screen_info, int argc, char** argv)
 +{
@@ -900,6 +924,10 @@ new file mode 100644
 +			B_DISPLAY_PRIORITY, gVApp);
 +		if (thread < B_OK || resume_thread(thread) != B_OK)
 +			FatalError("XVitruvian: cannot start the application\n");
++		thread = spawn_thread(vWatchAppServer, "xv watch",
++			B_NORMAL_PRIORITY, NULL);
++		if (thread >= B_OK)
++			resume_thread(thread);
 +	}
 +
 +	if (gVWakeRead < 0) {
