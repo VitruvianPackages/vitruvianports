@@ -4508,7 +4508,7 @@ new file mode 100644
 +// Core cursor font shapes with a system equivalent; the others are drawn
 +// from their bitmaps.
 +static const VGlyphCursor kGlyphCursors[] = {
-+	{ XC_X_cursor, B_CURSOR_ID_NOT_ALLOWED },
++	{ XC_X_cursor, B_CURSOR_ID_SYSTEM_DEFAULT },	// the root cursor
 +	{ XC_arrow, B_CURSOR_ID_SYSTEM_DEFAULT },
 +	{ XC_top_left_arrow, B_CURSOR_ID_SYSTEM_DEFAULT },
 +	{ XC_left_ptr, B_CURSOR_ID_SYSTEM_DEFAULT },
