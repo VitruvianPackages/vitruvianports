@@ -6048,7 +6048,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,1040 @@
+@@ -0,0 +1,1141 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -6066,6 +6066,7 @@ new file mode 100644
 +#include "vPriv.h"
 +
 +#include <dirent.h>
++#include <dlfcn.h>
 +#include <errno.h>
 +#include <fcntl.h>
 +#include <gbm.h>
@@ -6114,8 +6115,9 @@ new file mode 100644
 +	// The buffer's own row pitch; a gbm copy's pixmap has its own.
 +	uint32	stride;
 +	bool	syncing;
-+	// Set for the device's own layout, read through gbm into copy.
++	// Set for a tiled or device-own layout, read through gbm into copy.
 +	struct gbm_bo*	bo;
++	uint64_t	modifier;
 +	void*	copy;
 +	int		width;
 +	int		height;
@@ -6537,7 +6539,7 @@ new file mode 100644
 +		desc.fourcc = kFormatXRGB8888;
 +		desc.stride = buf->stride;
 +		desc.offset = buf->offset;
-+		desc.modifier = buf->bo != NULL ? kModInvalid : kModLinear;
++		desc.modifier = buf->modifier;
 +		int32 imported = -1;
 +		if (!priv->surface->ExternalImport(buf->fd, desc, &imported)
 +			|| imported != flip->slotCount) {
@@ -6751,19 +6753,98 @@ new file mode 100644
 +}
 +
 +
++// Tiled modifiers the render GPU can draw into, for one format at a time.
++static const int kMaxModifiers = 64;
++static uint32_t sModCount[2];
++static uint64_t sMods[2][kMaxModifiers];
++static bool sModsQueried = false;
++
++typedef void* (*VEglGetDisplay)(unsigned, void*, const int*);
++typedef unsigned (*VEglInit)(void*, int*, int*);
++typedef unsigned (*VEglQueryMods)(void*, int, int, uint64_t*, unsigned*, int*);
++typedef void* (*VEglGetProc)(const char*);
++
++// Asks EGL on the gbm device; linear stays the only entry when it is absent.
++static void
++vQueryModifiers()
++{
++	sModsQueried = true;
++	for (int i = 0; i < 2; i++) {
++		sMods[i][0] = kModLinear;
++		sModCount[i] = 1;
++	}
++	if (sGbm == NULL)
++		return;
++
++	void* lib = dlopen("libEGL.so.1", RTLD_LAZY | RTLD_LOCAL);
++	if (lib == NULL)
++		return;
++	VEglGetProc getProc = (VEglGetProc)dlsym(lib, "eglGetProcAddress");
++	VEglInit init = (VEglInit)dlsym(lib, "eglInitialize");
++	VEglGetDisplay getDisplay
++		= getProc != NULL ? (VEglGetDisplay)getProc("eglGetPlatformDisplayEXT")
++			: NULL;
++	VEglQueryMods query
++		= getProc != NULL ? (VEglQueryMods)getProc("eglQueryDmaBufModifiersEXT")
++			: NULL;
++	if (init == NULL || getDisplay == NULL || query == NULL)
++		return;
++
++	// EGL_PLATFORM_GBM_KHR
++	void* display = getDisplay(0x31D7, sGbm, NULL);
++	int major, minor;
++	if (display == NULL || !init(display, &major, &minor))
++		return;
++
++	const uint32_t formats[2] = { kFormatXRGB8888, kFormatARGB8888 };
++	for (int i = 0; i < 2; i++) {
++		uint64_t mods[kMaxModifiers];
++		int external[kMaxModifiers];
++		unsigned count = 0;
++		if (!query(display, (int)formats[i], kMaxModifiers, mods, &count,
++				external))
++			continue;
++		for (unsigned j = 0; j < count && sModCount[i] < kMaxModifiers; j++) {
++			// Single plane, renderable, a real layout.
++			if (external[j] || mods[j] == kModLinear || mods[j] == kModInvalid
++				|| gbm_device_get_format_modifier_plane_count(sGbm, formats[i],
++					mods[j]) != 1)
++				continue;
++			sMods[i][sModCount[i]++] = mods[j];
++		}
++	}
++}
++
++
++static bool
++vModifierAdvertised(uint32_t format, uint64_t modifier)
++{
++	if (!sModsQueried)
++		vQueryModifiers();
++	int index = format == kFormatARGB8888 ? 1 : 0;
++	for (uint32_t i = 0; i < sModCount[index]; i++) {
++		if (sMods[index][i] == modifier)
++			return true;
++	}
++	return false;
++}
++
++
 +static PixmapPtr
 +vPixmapFromFds(ScreenPtr screen, CARD8 numFds, const int* fds, CARD16 width,
 +	CARD16 height, const CARD32* strides, const CARD32* offsets, CARD8 depth,
 +	CARD8 bpp, CARD64 modifier)
 +{
 +	if (numFds != 1 || bpp != 32 || (depth != 24 && depth != 32)
-+		|| (modifier != kModLinear && modifier != kModInvalid)
++		|| (modifier != kModInvalid
++			&& !vModifierAdvertised(depth == 32 ? kFormatARGB8888
++				: kFormatXRGB8888, modifier))
 +		|| width == 0 || height == 0 || strides[0] < (CARD32)width * 4)
 +		return NULL;
 +
-+	// LINEAR is mapped and read as rows. INVALID is the device's own layout,
-+	// which gbm detiles.
-+	const bool own = modifier == kModInvalid;
++	// LINEAR is mapped and read as rows. INVALID and tiled modifiers are the
++	// device's layout, which gbm detiles.
++	const bool own = modifier != kModLinear;
 +	if (own && sGbm == NULL)
 +		return NULL;
 +
@@ -6784,7 +6865,7 @@ new file mode 100644
 +		data.fds[0] = fds[0];
 +		data.strides[0] = (int)strides[0];
 +		data.offsets[0] = (int)offsets[0];
-+		data.modifier = kModInvalid;
++		data.modifier = modifier;
 +		bo = gbm_bo_import(sGbm, GBM_BO_IMPORT_FD_MODIFIER, &data,
 +			GBM_BO_USE_RENDERING);
 +		if (bo == NULL)
@@ -6832,6 +6913,7 @@ new file mode 100644
 +	buf->offset = offsets[0];
 +	buf->stride = strides[0];
 +	buf->bo = bo;
++	buf->modifier = modifier;
 +	buf->copy = own ? map : NULL;
 +	buf->width = width;
 +	buf->height = height;
@@ -6851,15 +6933,25 @@ new file mode 100644
 +	uint32_t* strides, uint32_t* offsets, uint64_t* modifier)
 +{
 +	VDmabuf* buf = vDmabuf(pix);
-+	if (buf->fd <= 0 || buf->map == NULL)
++	if (buf->fd <= 0)
++		return 0;
++	// A tiled import goes back as it came; the gbm copy is only for reading.
++	bool tiled = buf->bo != NULL && buf->modifier != kModInvalid;
++	if (buf->map == NULL && !tiled)
 +		return 0;
 +	int dup = fcntl(buf->fd, F_DUPFD_CLOEXEC, 3);
 +	if (dup < 0)
 +		return 0;
 +	fds[0] = dup;
-+	strides[0] = pix->devKind;
-+	offsets[0] = (uint32_t)((char*)pix->devPrivate.ptr - (char*)buf->map);
-+	*modifier = kModLinear;
++	if (tiled) {
++		strides[0] = buf->stride;
++		offsets[0] = (uint32_t)buf->offset;
++		*modifier = buf->modifier;
++	} else {
++		strides[0] = pix->devKind;
++		offsets[0] = (uint32_t)((char*)pix->devPrivate.ptr - (char*)buf->map);
++		*modifier = kModLinear;
++	}
 +	return 1;
 +}
 +
@@ -6878,16 +6970,24 @@ new file mode 100644
 +}
 +
 +
++// The screen list stays linear: it serves pixmaps and clients that may sit
++// on another GPU. The window list adds what the render GPU draws tiled;
++// a client on a different GPU renders on its own device and shares linear.
 +static Bool
-+vModifiers(uint32_t format, uint32_t* count, uint64_t** modifiers)
++vModifiers(uint32_t format, bool window, uint32_t* count,
++	uint64_t** modifiers)
 +{
 +	if (format != kFormatXRGB8888 && format != kFormatARGB8888)
 +		return FALSE;
-+	uint64_t* list = (uint64_t*)malloc(sizeof(uint64_t));
++	if (!sModsQueried)
++		vQueryModifiers();
++	int index = format == kFormatARGB8888 ? 1 : 0;
++	uint32_t n = window ? sModCount[index] : 1;
++	uint64_t* list = (uint64_t*)malloc(n * sizeof(uint64_t));
 +	if (list == NULL)
 +		return FALSE;
-+	list[0] = kModLinear;
-+	*count = 1;
++	memcpy(list, sMods[index], n * sizeof(uint64_t));
++	*count = n;
 +	*modifiers = list;
 +	return TRUE;
 +}
@@ -6897,7 +6997,7 @@ new file mode 100644
 +vGetModifiers(ScreenPtr /*screen*/, uint32_t format, uint32_t* count,
 +	uint64_t** modifiers)
 +{
-+	return vModifiers(format, count, modifiers);
++	return vModifiers(format, false, count, modifiers);
 +}
 +
 +
@@ -6905,7 +7005,7 @@ new file mode 100644
 +vGetDrawableModifiers(DrawablePtr /*draw*/, uint32_t format, uint32_t* count,
 +	uint64_t** modifiers)
 +{
-+	return vModifiers(format, count, modifiers);
++	return vModifiers(format, true, count, modifiers);
 +}
 +
 +
@@ -7044,6 +7144,7 @@ new file mode 100644
 +	}
 +
 +	sGbm = gbm_create_device(sRenderFd);
++	vQueryModifiers();
 +	const char* noFlip = getenv("XVITR_NO_FLIP");
 +	sFlipEnabled = (noFlip == NULL || atoi(noFlip) == 0) && vPortsCarryFds();
 +
