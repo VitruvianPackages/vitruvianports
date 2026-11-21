@@ -2446,7 +2446,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1508 @@
+@@ -0,0 +1,1514 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -3258,6 +3258,10 @@ new file mode 100644
 +	count = vReadCards(pWin, vAtom("_MOTIF_WM_HINTS"), cards, 16);
 +	if (count >= 3 && (cards[0] & (1 << 1)) != 0 && cards[2] == 0)
 +		clientDecorated = true;
++	// Border without title (MWM_DECOR_BORDER only): the client draws its
++	// own buttons, the tab keeps just the title.
++	bool ownButtons = count >= 3 && (cards[0] & (1 << 1)) != 0
++		&& cards[2] != 0 && (cards[2] & ((1 << 0) | (1 << 3))) == 0;
 +
 +	if (vReadCards(pWin, vAtom("_GTK_FRAME_EXTENTS"), cards, 16) >= 4)
 +		clientDecorated = true;
@@ -3289,6 +3293,8 @@ new file mode 100644
 +		style->look = B_NO_BORDER_WINDOW_LOOK;
 +	else if (clientDecorated && style->look == B_TITLED_WINDOW_LOOK)
 +		style->look = B_BORDERED_WINDOW_LOOK;
++	else if (ownButtons && style->look == B_TITLED_WINDOW_LOOK)
++		style->flags |= B_NOT_CLOSABLE | B_NOT_ZOOMABLE;
 +
 +	// Tab and border sizes of the native decorations.
 +	if (style->look == B_BORDERED_WINDOW_LOOK) {
