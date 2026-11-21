@@ -6048,7 +6048,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,913 @@
+@@ -0,0 +1,1040 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -6374,30 +6374,144 @@ new file mode 100644
 +}
 +
 +
++// Why a flip was declined, counted per window; a change of reason is logged.
++enum {
++	kDeclineNone,
++	kDeclineDisabled,
++	kDeclineOffset,
++	kDeclineChildren,
++	kDeclineDepth,
++	kDeclineNoSurface,
++	kDeclineNotTopLevel,
++	kDeclineNotMapped,
++	kDeclineNoDmabuf,
++	kDeclineInsets,
++	kDeclineSize,
++	kDeclineNotReady,
++	kDeclineNoFlip,
++	kDeclineSlots,
++	kDeclineImport,
++	kDeclineNoMemory,
++	kDeclinePresent,
++	kDeclineCount
++};
++
++static const char* const kDeclineText[kDeclineCount] = {
++	"none", "flip disabled", "window offset", "child windows",
++	"depth is not 24", "no surface", "not a top-level window",
++	"window not mapped", "buffer has no dmabuf",
++	"client-side decoration insets", "pixmap size differs from window",
++	"swap chain not ready or refused", "no flip state",
++	"no free flip slot or buffer bound elsewhere", "buffer import failed",
++	"out of memory", "present failed"
++};
++
++struct VDecline {
++	Window		window;
++	int			last;
++	bigtime_t	logged;
++	uint32_t	count[kDeclineCount];
++};
++
++static const int kDeclineWindows = 64;
++static VDecline sDeclines[kDeclineWindows];
++static int sDeclineNext = 0;
++
++
++static void
++vDeclineNote(Window window, int reason)
++{
++	VDecline* d = NULL;
++	for (int i = 0; i < kDeclineWindows; i++) {
++		if (sDeclines[i].window == window)
++			d = &sDeclines[i];
++	}
++	if (reason == kDeclineNone) {
++		if (d != NULL)
++			d->last = kDeclineNone;
++		return;
++	}
++	if (d == NULL) {
++		d = &sDeclines[sDeclineNext];
++		sDeclineNext = (sDeclineNext + 1) % kDeclineWindows;
++		memset(d, 0, sizeof(*d));
++		d->window = window;
++	}
++	d->count[reason]++;
++	if (d->last == reason)
++		return;
++	d->last = reason;
++	// One line per window per second at most.
++	const bigtime_t now = vNow();
++	if (now - d->logged < 1000000)
++		return;
++	d->logged = now;
++	ErrorF("xvitr: flip declined win 0x%x: %s (%u so far)\n",
++		(unsigned)window, kDeclineText[reason], (unsigned)d->count[reason]);
++}
++
++
 +// Present of a buffer that covers its window: the server shows it in place.
 +static Bool
 +vWindowFlipShow(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
-+	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence)
++	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence,
++	int* why)
 +{
-+	if (!sFlipEnabled || xOff != 0 || yOff != 0 || window->firstChild != NULL
-+		|| pixmap->drawable.depth != 24)
++	if (!sFlipEnabled) {
++		*why = kDeclineDisabled;
 +		return FALSE;
++	}
++	if (xOff != 0 || yOff != 0) {
++		*why = kDeclineOffset;
++		return FALSE;
++	}
++	if (window->firstChild != NULL) {
++		*why = kDeclineChildren;
++		return FALSE;
++	}
++	if (pixmap->drawable.depth != 24) {
++		*why = kDeclineDepth;
++		return FALSE;
++	}
 +
 +	VWindowPriv* priv = VWindowPrivFor(window);
 +	VDmabuf* buf = vDmabuf(pixmap);
-+	if (priv == NULL || priv->surface == NULL || !priv->topLevel
-+		|| !priv->mapped || buf->fd <= 0
-+		|| priv->csd[0] != 0 || priv->csd[1] != 0 || priv->csd[2] != 0
-+		|| priv->csd[3] != 0
-+		|| pixmap->drawable.width != window->drawable.width
-+		|| pixmap->drawable.height != window->drawable.height)
++	if (priv == NULL || priv->surface == NULL) {
++		*why = kDeclineNoSurface;
 +		return FALSE;
-+	if (!priv->surface->ExternalReady() || priv->surface->ExternalRefused())
++	}
++	if (!priv->topLevel) {
++		*why = kDeclineNotTopLevel;
 +		return FALSE;
++	}
++	if (!priv->mapped) {
++		*why = kDeclineNotMapped;
++		return FALSE;
++	}
++	if (buf->fd <= 0) {
++		*why = kDeclineNoDmabuf;
++		return FALSE;
++	}
++	if (priv->csd[0] != 0 || priv->csd[1] != 0 || priv->csd[2] != 0
++		|| priv->csd[3] != 0) {
++		*why = kDeclineInsets;
++		return FALSE;
++	}
++	if (pixmap->drawable.width != window->drawable.width
++		|| pixmap->drawable.height != window->drawable.height) {
++		*why = kDeclineSize;
++		return FALSE;
++	}
++	if (!priv->surface->ExternalReady() || priv->surface->ExternalRefused()) {
++		*why = kDeclineNotReady;
++		return FALSE;
++	}
 +
 +	VFlip* flip = vFlipFor(priv->xWindow, true);
-+	if (flip == NULL)
++	if (flip == NULL) {
++		*why = kDeclineNoFlip;
 +		return FALSE;
++	}
 +	// A resized chain has dropped the buffers the server held.
 +	if (flip->surface != priv->surface || flip->width != pixmap->drawable.width
 +		|| flip->height != pixmap->drawable.height) {
@@ -6413,8 +6527,10 @@ new file mode 100644
 +			slot = i;
 +	}
 +	if (slot < 0) {
-+		if (flip->slotCount == kFlipSlots || buf->flipWindow != 0)
++		if (flip->slotCount == kFlipSlots || buf->flipWindow != 0) {
++			*why = kDeclineSlots;
 +			return FALSE;
++		}
 +		BPrivate::swap_chain_external desc;
 +		desc.width = pixmap->drawable.width;
 +		desc.height = pixmap->drawable.height;
@@ -6424,8 +6540,10 @@ new file mode 100644
 +		desc.modifier = buf->bo != NULL ? kModInvalid : kModLinear;
 +		int32 imported = -1;
 +		if (!priv->surface->ExternalImport(buf->fd, desc, &imported)
-+			|| imported != flip->slotCount)
++			|| imported != flip->slotCount) {
++			*why = kDeclineImport;
 +			return FALSE;
++		}
 +		slot = imported;
 +		flip->slots[flip->slotCount++] = pixmap;
 +		buf->flipWindow = priv->xWindow;
@@ -6433,8 +6551,10 @@ new file mode 100644
 +
 +	VFlipPending* list = (VFlipPending*)realloc(flip->pending,
 +		sizeof(VFlipPending) * (flip->pendingCount + 1));
-+	if (list == NULL)
++	if (list == NULL) {
++		*why = kDeclineNoMemory;
 +		return FALSE;
++	}
 +	flip->pending = list;
 +
 +	BRegion damage;
@@ -6447,8 +6567,10 @@ new file mode 100644
 +				box->y2 - 1));
 +		}
 +	}
-+	if (!priv->surface->PresentExternal(slot, damage))
++	if (!priv->surface->PresentExternal(slot, damage)) {
++		*why = kDeclinePresent;
 +		return FALSE;
++	}
 +
 +	VFlipPending& pending = flip->pending[flip->pendingCount++];
 +	pending.pixmap = pixmap;
@@ -6468,8 +6590,13 @@ new file mode 100644
 +vWindowFlip(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
 +	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence)
 +{
-+	if (vWindowFlipShow(window, pixmap, update, xOff, yOff, serial, fence))
++	int why = kDeclineNone;
++	if (vWindowFlipShow(window, pixmap, update, xOff, yOff, serial, fence,
++			&why)) {
++		vDeclineNote(window->drawable.id, kDeclineNone);
 +		return TRUE;
++	}
++	vDeclineNote(window->drawable.id, why);
 +
 +	VDmabuf* buf = vDmabuf(pixmap);
 +	if (buf->fd > 0) {
