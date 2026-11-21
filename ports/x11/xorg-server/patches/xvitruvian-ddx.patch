@@ -1953,7 +1953,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,234 @@
+@@ -0,0 +1,239 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2076,6 +2076,8 @@ new file mode 100644
 +	bool		topLevel;
 +	bool		mapped;
 +	bool		dirty;
++	// Shows a client buffer in place of the window pixmap.
++	bool		flipped;
 +	bool		fullscreen;
 +	bool		maxH;
 +	bool		maxV;
@@ -2146,6 +2148,9 @@ new file mode 100644
 +void			VUploadWindowRegion(VWindowPriv* priv, const BoxRec* rects,
 +				int n, int dx, int dy);
 +void			VInitDri3Present(ScreenPtr screen);
++int			VFlipRestore(VWindowPriv* priv, WindowPtr window,
++				RegionPtr damage);
++void			VFlipForget(VWindowPriv* priv);
 +WindowPtr		VWindowForId(uint32 id);
 +void			VWindowSetTeam(uint32 windowId, team_id team);
 +void			VWindowAttribute(WindowPtr pWin);
@@ -2582,7 +2587,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1544 @@
+@@ -0,0 +1,1555 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -3170,8 +3175,17 @@ new file mode 100644
 +		WindowPtr pWin = vLookupWindow(priv->xWindow);
 +		if (pWin != NULL && priv->surface != NULL && priv->mapped
 +			&& rects != NULL && nRects > 0) {
-+			VUploadWindowRegion(priv, rects, nRects, pWin->drawable.x,
-+				pWin->drawable.y);
++			// X drew over a client buffer: put its picture back first.
++			const int flipped = VFlipRestore(priv, pWin, region);
++			if (flipped == 1) {
++				BoxRec whole = { 0, 0, (short)pWin->drawable.width,
++					(short)pWin->drawable.height };
++				VUploadWindowRegion(priv, &whole, 1, pWin->drawable.x,
++					pWin->drawable.y);
++			} else if (flipped == 0) {
++				VUploadWindowRegion(priv, rects, nRects, pWin->drawable.x,
++					pWin->drawable.y);
++			}
 +		}
 +
 +		DamageEmpty(damage);
@@ -3908,6 +3922,7 @@ new file mode 100644
 +	VWindowPriv* priv = vPriv(pWin);
 +	if (priv != NULL) {
 +		vForgetDirty(priv);
++		VFlipForget(priv);
 +		if (priv->damage != NULL) {
 +			DamageUnregister((DamagePtr)priv->damage);
 +			DamageDestroy((DamagePtr)priv->damage);
@@ -4059,6 +4074,7 @@ new file mode 100644
 +	VWindowPriv* priv = vPriv(pWin);
 +	if (priv != NULL && priv->surface != NULL) {
 +		priv->mapped = false;
++		VFlipForget(priv);
 +		priv->surface->Hide();
 +	}
 +
@@ -5895,15 +5911,16 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,421 @@
+@@ -0,0 +1,834 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
 + */
 +
-+// DRI3 import of linear dma-buf pixmaps and Present. Clients render into
-+// their own buffers; Present copies the imported pixmap into the window
-+// pixmap, which then goes out through the normal damage upload.
++// DRI3 import of dma-buf pixmaps and Present. Clients render into their own
++// buffers. A buffer that covers its window goes to the server as a dma-buf
++// and is shown without a copy; any other Present copies the pixmap into the
++// window pixmap, which goes out through the normal damage upload.
 +
 +#ifdef HAVE_DIX_CONFIG_H
 +#include <dix-config.h>
@@ -5921,7 +5938,14 @@ new file mode 100644
 +#include <sys/ioctl.h>
 +#include <sys/mman.h>
 +#include <sys/stat.h>
++#include <sys/sysmacros.h>
++#include <time.h>
 +#include <unistd.h>
++
++#include <OS.h>
++#include <PortFds.h>
++#include <Region.h>
++#include <Surface.h>
 +
 +#define class class_
 +#define public public_
@@ -5948,7 +5972,38 @@ new file mode 100644
 +	int		fd;
 +	void*	map;
 +	size_t	mapSize;
++	size_t	offset;
 +	bool	syncing;
++	// The device's own layout: the pages cannot be read as rows.
++	bool	tiled;
++	// Blank pages a tiled buffer shows to copies.
++	void*	shadow;
++	// The window whose chain holds the slot, 0 when none.
++	Window	flipWindow;
++};
++
++static const int kFlipSlots = 4;
++static const bigtime_t kFlipBackstop = 250000;
++
++// A buffer shown on a window, idle once the server shows another one.
++struct VFlipPending {
++	PixmapPtr				pixmap;
++	CARD32					serial;
++	struct present_fence*	fence;
++	int						slot;
++	bigtime_t				since;
++};
++
++// Imported buffers of one window.
++struct VFlip {
++	Window			window;
++	BSurface*		surface;
++	int32			width;
++	int32			height;
++	PixmapPtr		slots[kFlipSlots];
++	int				slotCount;
++	VFlipPending*	pending;
++	int				pendingCount;
 +};
 +
 +static DevPrivateKeyRec sDmabufKey;
@@ -5956,6 +6011,10 @@ new file mode 100644
 +static DestroyPixmapProcPtr sDestroyPixmap = NULL;
 +static VDmabuf** sImported = NULL;
 +static int sImportedCount = 0;
++static bool sFlipEnabled = true;
++static char sRenderDriver[32];
++static VFlip** sFlips = NULL;
++static int sFlipCount = 0;
 +
 +static VDmabuf*
 +vDmabuf(PixmapPtr pix)
@@ -5998,11 +6057,17 @@ new file mode 100644
 +// Present copies from the client pixmap inside requests, with no hook to
 +// bracket it. Keep a read window open per imported buffer and renew it
 +// each loop so the next batch of copies sees fresh GPU writes.
++static void vFlipPoll(void* timeout);
++
++
 +static void
-+vDmabufBlock(void* /*data*/, void* /*timeout*/)
++vDmabufBlock(void* /*data*/, void* timeout)
 +{
++	vFlipPoll(timeout);
 +	for (int i = 0; i < sImportedCount; i++) {
 +		VDmabuf* buf = sImported[i];
++		if (buf->tiled)
++			continue;
 +		if (buf->syncing)
 +			vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
 +		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
@@ -6017,17 +6082,277 @@ new file mode 100644
 +}
 +
 +
++static bigtime_t
++vNow()
++{
++	struct timespec now;
++	clock_gettime(CLOCK_MONOTONIC, &now);
++	return (bigtime_t)now.tv_sec * 1000000 + now.tv_nsec / 1000;
++}
++
++
++static VFlip*
++vFlipFor(Window window, bool create)
++{
++	for (int i = 0; i < sFlipCount; i++) {
++		if (sFlips[i]->window == window)
++			return sFlips[i];
++	}
++	if (!create)
++		return NULL;
++
++	VFlip* flip = (VFlip*)calloc(1, sizeof(VFlip));
++	VFlip** list = (VFlip**)realloc(sFlips, sizeof(VFlip*) * (sFlipCount + 1));
++	if (flip == NULL || list == NULL) {
++		free(flip);
++		return NULL;
++	}
++	flip->window = window;
++	sFlips = list;
++	sFlips[sFlipCount++] = flip;
++	return flip;
++}
++
++
++static void
++vFlipIdle(VFlip* flip, int index)
++{
++	VFlipPending done = flip->pending[index];
++	flip->pending[index] = flip->pending[--flip->pendingCount];
++	WindowPtr window = flip->window != 0 ? VWindowForId(flip->window) : NULL;
++	present_window_flip_done(done.pixmap, window, done.serial, done.fence);
++}
++
++
++// Forgets the slots the server holds; a buffer still on screen idles late.
++static void
++vFlipReset(VFlip* flip, bool tellServer)
++{
++	if (tellServer && flip->surface != NULL)
++		flip->surface->ExternalReset();
++	for (int i = 0; i < flip->slotCount; i++) {
++		if (flip->slots[i] != NULL) {
++			VDmabuf* buf = vDmabuf(flip->slots[i]);
++			if (buf != NULL)
++				buf->flipWindow = 0;
++		}
++		flip->slots[i] = NULL;
++	}
++	flip->slotCount = 0;
++	for (int i = 0; i < flip->pendingCount; i++)
++		flip->pending[i].slot = -1;
++}
++
++
++static void
++vFlipPoll(void* timeout)
++{
++	if (sFlipCount == 0)
++		return;
++
++	bool waiting = false;
++	const bigtime_t now = vNow();
++	for (int f = 0; f < sFlipCount; f++) {
++		VFlip* flip = sFlips[f];
++		for (int i = flip->pendingCount - 1; i >= 0; i--) {
++			const VFlipPending& pending = flip->pending[i];
++			const bool released = pending.slot >= 0 && flip->surface != NULL
++				&& flip->surface->ExternalReleased(pending.slot);
++			const bigtime_t age = now - pending.since;
++			// The server showed nothing else: do not stall the client.
++			if (released || age > kFlipBackstop
++				|| (pending.slot < 0 && age > 100000))
++				vFlipIdle(flip, i);
++		}
++		waiting = waiting || flip->pendingCount > 0;
++	}
++	if (waiting)
++		AdjustWaitForDelay(timeout, 2);
++}
++
++
++// Present of a buffer that covers its window: the server shows it in place.
++static Bool
++vWindowFlip(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
++	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence)
++{
++	if (!sFlipEnabled || xOff != 0 || yOff != 0 || window->firstChild != NULL
++		|| pixmap->drawable.depth != 24)
++		return FALSE;
++
++	VWindowPriv* priv = VWindowPrivFor(window);
++	VDmabuf* buf = vDmabuf(pixmap);
++	if (priv == NULL || priv->surface == NULL || !priv->topLevel
++		|| !priv->mapped || buf->fd <= 0
++		|| priv->csd[0] != 0 || priv->csd[1] != 0 || priv->csd[2] != 0
++		|| priv->csd[3] != 0
++		|| pixmap->drawable.width != window->drawable.width
++		|| pixmap->drawable.height != window->drawable.height)
++		return FALSE;
++	if (!priv->surface->ExternalReady() || priv->surface->ExternalRefused())
++		return FALSE;
++
++	VFlip* flip = vFlipFor(priv->xWindow, true);
++	if (flip == NULL)
++		return FALSE;
++	// A resized chain has dropped the buffers the server held.
++	if (flip->surface != priv->surface || flip->width != pixmap->drawable.width
++		|| flip->height != pixmap->drawable.height) {
++		vFlipReset(flip, flip->surface == priv->surface);
++		flip->surface = priv->surface;
++		flip->width = pixmap->drawable.width;
++		flip->height = pixmap->drawable.height;
++	}
++
++	int slot = -1;
++	for (int i = 0; i < flip->slotCount; i++) {
++		if (flip->slots[i] == pixmap)
++			slot = i;
++	}
++	if (slot < 0) {
++		if (flip->slotCount == kFlipSlots || buf->flipWindow != 0)
++			return FALSE;
++		BPrivate::swap_chain_external desc;
++		desc.width = pixmap->drawable.width;
++		desc.height = pixmap->drawable.height;
++		desc.fourcc = kFormatXRGB8888;
++		desc.stride = pixmap->devKind;
++		desc.offset = buf->offset;
++		desc.modifier = buf->tiled ? kModInvalid : kModLinear;
++		int32 imported = -1;
++		if (!priv->surface->ExternalImport(buf->fd, desc, &imported)
++			|| imported != flip->slotCount)
++			return FALSE;
++		slot = imported;
++		flip->slots[flip->slotCount++] = pixmap;
++		buf->flipWindow = priv->xWindow;
++	}
++
++	VFlipPending* list = (VFlipPending*)realloc(flip->pending,
++		sizeof(VFlipPending) * (flip->pendingCount + 1));
++	if (list == NULL)
++		return FALSE;
++	flip->pending = list;
++
++	BRegion damage;
++	if (update == NULL) {
++		damage.Set(BRect(0, 0, flip->width - 1, flip->height - 1));
++	} else {
++		for (int i = 0; i < RegionNumRects(update); i++) {
++			BoxPtr box = RegionRects(update) + i;
++			damage.Include(BRect(box->x1, box->y1, box->x2 - 1,
++				box->y2 - 1));
++		}
++	}
++	if (!priv->surface->PresentExternal(slot, damage))
++		return FALSE;
++
++	VFlipPending& pending = flip->pending[flip->pendingCount++];
++	pending.pixmap = pixmap;
++	pending.serial = serial;
++	pending.fence = fence;
++	pending.slot = slot;
++	pending.since = vNow();
++	priv->flipped = true;
++	return TRUE;
++}
++
++
++// X drew into a window that shows a client buffer. 0: not flipped, 1: the
++// window pixmap holds the picture again and the caller uploads it, 2: the
++// buffer cannot be read back, the drawing is dropped.
++int
++VFlipRestore(VWindowPriv* priv, WindowPtr window, RegionPtr damage)
++{
++	if (priv == NULL || !priv->flipped)
++		return 0;
++
++	VFlip* flip = vFlipFor(priv->xWindow, false);
++	PixmapPtr shown = NULL;
++	if (flip != NULL && flip->pendingCount > 0) {
++		int slot = flip->pending[flip->pendingCount - 1].slot;
++		if (slot >= 0 && slot < flip->slotCount)
++			shown = flip->slots[slot];
++	}
++	VDmabuf* buf = shown != NULL ? vDmabuf(shown) : NULL;
++	if (buf != NULL && buf->tiled)
++		return 2;
++
++	if (buf != NULL && buf->map != NULL) {
++		PixmapPtr dst = (*gVScreen->GetWindowPixmap)(window);
++		if (dst != NULL && dst->devPrivate.ptr != NULL
++			&& dst->drawable.width == shown->drawable.width
++			&& dst->drawable.height == shown->drawable.height) {
++			// Keep what X just drew, restore the rest.
++			RegionRec rest;
++			BoxRec box = { 0, 0, (short)dst->drawable.width,
++				(short)dst->drawable.height };
++			RegionInit(&rest, &box, 1);
++			RegionSubtract(&rest, &rest, damage);
++			vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
++			for (int i = 0; i < RegionNumRects(&rest); i++) {
++				BoxPtr r = RegionRects(&rest) + i;
++				for (int y = r->y1; y < r->y2; y++) {
++					memcpy((char*)dst->devPrivate.ptr + (size_t)y
++							* dst->devKind + (size_t)r->x1 * 4,
++						(char*)shown->devPrivate.ptr + (size_t)y
++							* shown->devKind + (size_t)r->x1 * 4,
++						(size_t)(r->x2 - r->x1) * 4);
++				}
++			}
++			vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++			RegionUninit(&rest);
++		}
++	}
++	priv->flipped = false;
++	return 1;
++}
++
++
++void
++VFlipForget(VWindowPriv* priv)
++{
++	if (priv == NULL)
++		return;
++
++	for (int f = 0; f < sFlipCount; f++) {
++		VFlip* flip = sFlips[f];
++		if (flip->window != priv->xWindow)
++			continue;
++
++		vFlipReset(flip, false);
++		while (flip->pendingCount > 0)
++			vFlipIdle(flip, flip->pendingCount - 1);
++		free(flip->pending);
++		free(flip);
++		sFlips[f] = sFlips[--sFlipCount];
++		break;
++	}
++	priv->flipped = false;
++}
++
++
++
 +static Bool
 +vDestroyPixmap(PixmapPtr pix)
 +{
 +	if (pix->refcnt == 1) {
 +		VDmabuf* buf = vDmabuf(pix);
-+		if (buf->map != NULL) {
++		if (buf->fd > 0 && buf->flipWindow != 0) {
++			VFlip* flip = vFlipFor(buf->flipWindow, false);
++			if (flip != NULL)
++				vFlipReset(flip, true);
++		}
++		if (buf->fd > 0) {
 +			vTrackImport(buf, false);
 +			if (buf->syncing)
 +				vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
-+			munmap(buf->map, buf->mapSize);
++			if (buf->map != NULL)
++				munmap(buf->map, buf->mapSize);
++			free(buf->shadow);
++			buf->shadow = NULL;
 +			close(buf->fd);
++			buf->fd = 0;
 +			buf->map = NULL;
 +		}
 +	}
@@ -6054,16 +6379,45 @@ new file mode 100644
 +}
 +
 +
++// Name of the kernel driver behind a render node or the exporter of a
++// dma-buf (fdinfo), '' when unknown.
++static void
++vExporterOf(int fd, char* name)
++{
++	name[0] = '\0';
++	char path[64];
++	snprintf(path, sizeof(path), "/proc/self/fdinfo/%d", fd);
++	FILE* file = fopen(path, "r");
++	if (file == NULL)
++		return;
++	char line[128];
++	while (fgets(line, sizeof(line), file) != NULL) {
++		if (sscanf(line, "exp_name: %31s", name) == 1)
++			break;
++	}
++	fclose(file);
++}
++
++
 +static PixmapPtr
 +vPixmapFromFds(ScreenPtr screen, CARD8 numFds, const int* fds, CARD16 width,
 +	CARD16 height, const CARD32* strides, const CARD32* offsets, CARD8 depth,
 +	CARD8 bpp, CARD64 modifier)
 +{
-+	// Only linear is advertised, so a client without modifier support
-+	// sends INVALID for the linear buffer it was told to allocate.
-+	bool linear = modifier == kModLinear || modifier == kModInvalid;
-+	if (numFds != 1 || bpp != 32 || (depth != 24 && depth != 32) || !linear
++	if (numFds != 1 || bpp != 32 || (depth != 24 && depth != 32)
++		|| (modifier != kModLinear && modifier != kModInvalid)
 +		|| width == 0 || height == 0 || strides[0] < (CARD32)width * 4)
++		return NULL;
++
++	// Rows can be read only from LINEAR, or from INVALID made by another
++	// GPU. Anything else is the display GPU's layout and can only be flipped.
++	bool tiled = false;
++	if (modifier == kModInvalid) {
++		char exporter[32];
++		vExporterOf(fds[0], exporter);
++		tiled = strcmp(exporter, sRenderDriver) == 0;
++	}
++	if (tiled && !sFlipEnabled)
 +		return NULL;
 +
 +	struct stat st;
@@ -6071,38 +6425,57 @@ new file mode 100644
 +	if (fstat(fds[0], &st) < 0 || (size_t)st.st_size < need)
 +		return NULL;
 +
-+	void* map = mmap(NULL, need, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0],
-+		0);
-+	if (map == MAP_FAILED)
++	void* map = NULL;
++	if (tiled) {
++		// Copies show this buffer blank; the server shows it in place.
++		map = calloc(1, need);
++	} else {
++		map = mmap(NULL, need, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
++		if (map == MAP_FAILED)
++			map = NULL;
++	}
++	if (map == NULL)
 +		return NULL;
++	#define V_UNMAP() do { if (tiled) free(map); else munmap(map, need); } while (0)
 +
 +	PixmapPtr pix = fbCreatePixmap(screen, 0, 0, depth, 0);
 +	if (pix == NULL) {
-+		munmap(map, need);
++		V_UNMAP();
 +		return NULL;
 +	}
 +	if (!(*screen->ModifyPixmapHeader)(pix, width, height, depth, bpp,
 +			strides[0], (char*)map + offsets[0])) {
 +		(*screen->DestroyPixmap)(pix);
-+		munmap(map, need);
++		V_UNMAP();
 +		return NULL;
 +	}
 +
 +	int dup = fcntl(fds[0], F_DUPFD_CLOEXEC, 3);
 +	if (dup < 0) {
 +		(*screen->DestroyPixmap)(pix);
-+		munmap(map, need);
++		V_UNMAP();
 +		return NULL;
 +	}
 +
 +	VDmabuf* buf = vDmabuf(pix);
 +	buf->fd = dup;
-+	buf->map = map;
++	buf->map = tiled ? NULL : map;
 +	buf->mapSize = need;
++	buf->offset = offsets[0];
++	buf->tiled = tiled;
++	buf->flipWindow = 0;
 +	buf->syncing = false;
-+	vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
-+	buf->syncing = true;
-+	vTrackImport(buf, true);
++	if (tiled) {
++		// The pages live in the pixmap's own storage until it is freed.
++		pix->devPrivate.ptr = (char*)map + offsets[0];
++		buf->map = NULL;
++		buf->shadow = map;
++	} else {
++		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
++		buf->syncing = true;
++		vTrackImport(buf, true);
++	}
++	#undef V_UNMAP
 +	return pix;
 +}
 +
@@ -6112,7 +6485,7 @@ new file mode 100644
 +	uint32_t* strides, uint32_t* offsets, uint64_t* modifier)
 +{
 +	VDmabuf* buf = vDmabuf(pix);
-+	if (buf->map == NULL)
++	if (buf->fd <= 0 || buf->map == NULL)
 +		return 0;
 +	int dup = fcntl(buf->fd, F_DUPFD_CLOEXEC, 3);
 +	if (dup < 0)
@@ -6258,6 +6631,54 @@ new file mode 100644
 +}
 +
 +
++// Kernel driver of an open render node.
++static void
++vNodeDriver(int fd, char* name, size_t size)
++{
++	name[0] = '\0';
++	struct stat st;
++	if (fstat(fd, &st) < 0)
++		return;
++	char path[128];
++	char link[128];
++	snprintf(path, sizeof(path), "/sys/dev/char/%u:%u/device/driver",
++		major(st.st_rdev), minor(st.st_rdev));
++	ssize_t length = readlink(path, link, sizeof(link) - 1);
++	if (length <= 0)
++		return;
++	link[length] = '\0';
++	const char* base = strrchr(link, '/');
++	snprintf(name, size, "%s", base != NULL ? base + 1 : link);
++}
++
++
++// Whether this kernel passes descriptors through ports.
++static bool
++vPortsCarryFds()
++{
++	port_id port = create_port(1, "xvitr fd probe");
++	if (port < 0)
++		return false;
++
++	int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
++	int32 code = 1;
++	bool ok = fd >= 0 && write_port_fds(port, 1, &code, sizeof(code), &fd, 1,
++		B_RELATIVE_TIMEOUT, 0) == B_OK;
++	if (ok) {
++		int received[PORT_MAX_FDS];
++		int32 count = PORT_MAX_FDS;
++		ok = read_port_fds(port, &code, &code, sizeof(code), received, &count,
++			B_RELATIVE_TIMEOUT, 0) >= 0 && count == 1;
++		if (ok)
++			close(received[0]);
++	}
++	if (fd >= 0)
++		close(fd);
++	delete_port(port);
++	return ok;
++}
++
++
 +static dri3_screen_info_rec sDri3Info;
 +
 +static void
@@ -6276,6 +6697,10 @@ new file mode 100644
 +		sRenderFd = -1;
 +		return;
 +	}
++
++	vNodeDriver(sRenderFd, sRenderDriver, sizeof(sRenderDriver));
++	const char* noFlip = getenv("XVITR_NO_FLIP");
++	sFlipEnabled = (noFlip == NULL || atoi(noFlip) == 0) && vPortsCarryFds();
 +
 +	// FenceFromFD needs the shm fence screen funcs, else BadMatch.
 +	if (!miSyncShmScreenInit(screen)) {
@@ -6315,5 +6740,9 @@ new file mode 100644
 +#ifdef PRESENT
 +	if (!present_screen_init(screen, NULL))
 +		LogMessage(X_WARNING, "vitruvian: Present init failed\n");
++#ifdef DRI3
++	else if (sRenderFd >= 0 && sFlipEnabled)
++		present_register_window_flip(vWindowFlip);
++#endif
 +#endif
 +}
