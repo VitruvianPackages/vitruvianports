@@ -6,7 +6,7 @@ diff --git a/hw/vitruvian/vInit.cpp b/hw/vitruvian/vInit.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInit.cpp
-@@ -0,0 +1,910 @@
+@@ -0,0 +1,942 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -633,15 +633,44 @@ new file mode 100644
 +static VShmFuncs sShmFuncs = { NULL, NULL };
 +
 +
++// Native density from the panel's physical size; 96 when it is unknown
++// or implausible (virtual displays report none).
++int
++VNativeDpi()
++{
++	BScreen screen(0);
++	monitor_info info;
++	if (!screen.IsValid() || screen.GetMonitorInfo(&info) != B_OK)
++		return 96;
++
++	BRect frame = screen.Frame();
++	float width = frame.Width() + 1;
++	if (info.width < 50 || info.width > 5000 || width < 1)
++		return 96;
++
++	int dpi = (int)(width * 25.4f / info.width + 0.5f);
++	return dpi < 48 || dpi > 480 ? 96 : dpi;
++}
++
++
++void
++VScreenMM(int width, int height, int* mmW, int* mmH)
++{
++	int dpi = VNativeDpi();
++	*mmW = (int)((int64_t)width * 254 / (dpi * 10));
++	*mmH = (int)((int64_t)height * 254 / (dpi * 10));
++}
++
++
 +static Bool
 +vScreenInit(ScreenPtr pScreen, int argc, char** argv)
 +{
 +	int dpix = monitorResolution;
 +	int dpiy = monitorResolution;
 +	if (dpix == 0)
-+		dpix = 96;
++		dpix = VNativeDpi();
 +	if (dpiy == 0)
-+		dpiy = 96;
++		dpiy = dpix;
 +
 +	BScreen screen(0);
 +	BRect frame = screen.Frame();
@@ -709,8 +738,10 @@ new file mode 100644
 +	SetRootClip(pScreen, ROOT_CLIP_NONE);
 +	pScreen->width = width;
 +	pScreen->height = height;
-+	pScreen->mmWidth = (CARD32)width * 254 / (96 * 10);
-+	pScreen->mmHeight = (CARD32)height * 254 / (96 * 10);
++	int mmW, mmH;
++	VScreenMM(width, height, &mmW, &mmH);
++	pScreen->mmWidth = mmW;
++	pScreen->mmHeight = mmH;
 +	SetRootClip(pScreen, ROOT_CLIP_FULL);
 +
 +	RRScreenSizeNotify(pScreen);
@@ -821,6 +852,7 @@ new file mode 100644
 +		return FALSE;
 +	if (!RROutputSetConnection(output, RR_Connected))
 +		return FALSE;
++	RROutputSetPhysicalSize(output, pScreen->mmWidth, pScreen->mmHeight);
 +	RRCrtcNotify(crtc, mode, 0, 0, RR_Rotate_0, NULL, 1, &output);
 +
 +	return TRUE;
@@ -911,7 +943,7 @@ new file mode 100644
 +	}
 +
 +	char envBuffer[32];
-+	snprintf(envBuffer, sizeof(envBuffer), "%d", 96);
++	snprintf(envBuffer, sizeof(envBuffer), "%d", VNativeDpi());
 +	setenv("Xft.dpi", envBuffer, 0);
 +
 +	ErrorF("XVitruvian: screen %dx%d on V\\OS app_server\n",
@@ -1921,7 +1953,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,234 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2126,6 +2158,8 @@ new file mode 100644
 +void			VInitInputDevices(int argc, char* argv[]);
 +void			VStartInputThread();
 +void			VReloadKeymap();
++int			VNativeDpi();
++void			VScreenMM(int width, int height, int* mmW, int* mmH);
 +void			VKeymapRefresh();
 +
 +// vClipboard.cpp
@@ -2158,7 +2192,7 @@ diff --git a/hw/vitruvian/vSettings.cpp b/hw/vitruvian/vSettings.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vSettings.cpp
-@@ -0,0 +1,386 @@
+@@ -0,0 +1,385 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2192,7 +2226,6 @@ new file mode 100644
 +status_t get_subpixel_antialiasing(bool* subpix);
 +status_t get_hinting_mode(uint8* hinting);
 +
-+static const int kDpi = 96;
 +static const int kCursorSize = 24;
 +
 +static WindowPtr sOwner = NULL;
@@ -2407,7 +2440,7 @@ new file mode 100644
 +	vPut32(data, sSerial);
 +	vPut32(data, 15);
 +
-+	vPutInt(data, "Xft/DPI", kDpi * 1024);
++	vPutInt(data, "Xft/DPI", VNativeDpi() * 1024);
 +	vPutInt(data, "Xft/Antialias", look.antialias ? 1 : 0);
 +	vPutInt(data, "Xft/Hinting", look.hinting != 0 ? 1 : 0);
 +	vPutString(data, "Xft/HintStyle",
@@ -2467,7 +2500,7 @@ new file mode 100644
 +		}
 +	}
 +
-+	result << "Xft.dpi:\t" << (int32)kDpi << "\n"
++	result << "Xft.dpi:\t" << (int32)VNativeDpi() << "\n"
 +		<< "Xft.antialias:\t" << (look.antialias ? "1" : "0") << "\n"
 +		<< "Xft.hinting:\t" << (look.hinting != 0 ? "1" : "0") << "\n"
 +		<< "Xft.hintstyle:\t"
