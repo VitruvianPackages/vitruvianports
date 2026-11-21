@@ -5895,7 +5895,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,421 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -5928,6 +5928,7 @@ new file mode 100644
 +extern "C" {
 +#ifdef DRI3
 +#include "dri3.h"
++#include "misyncshm.h"
 +#endif
 +#ifdef PRESENT
 +#include "present.h"
@@ -5941,6 +5942,7 @@ new file mode 100644
 +static const uint32_t kFormatXRGB8888 = 0x34325258;
 +static const uint32_t kFormatARGB8888 = 0x34325241;
 +static const uint64_t kModLinear = 0;
++static const uint64_t kModInvalid = 0x00ffffffffffffffULL;
 +
 +struct VDmabuf {
 +	int		fd;
@@ -6057,8 +6059,10 @@ new file mode 100644
 +	CARD16 height, const CARD32* strides, const CARD32* offsets, CARD8 depth,
 +	CARD8 bpp, CARD64 modifier)
 +{
-+	if (numFds != 1 || bpp != 32 || (depth != 24 && depth != 32)
-+		|| modifier != kModLinear	// an implicit layout may be tiled
++	// Only linear is advertised, so a client without modifier support
++	// sends INVALID for the linear buffer it was told to allocate.
++	bool linear = modifier == kModLinear || modifier == kModInvalid;
++	if (numFds != 1 || bpp != 32 || (depth != 24 && depth != 32) || !linear
 +		|| width == 0 || height == 0 || strides[0] < (CARD32)width * 4)
 +		return NULL;
 +
@@ -6166,24 +6170,90 @@ new file mode 100644
 +}
 +
 +
-+static int
-+vOpenRenderNode()
++static bool
++vReadSysfs(const char* path, char* value, size_t size)
 +{
-+	DIR* dir = opendir("/dev/dri");
++	FILE* file = fopen(path, "r");
++	if (file == NULL)
++		return false;
++	bool ok = fgets(value, size, file) != NULL;
++	fclose(file);
++	return ok;
++}
++
++
++// Card of the first lit connector, else -1.
++static int
++vDisplayCard()
++{
++	DIR* dir = opendir("/sys/class/drm");
++	if (dir == NULL)
++		return -1;
++	int card = -1;
++	struct dirent* entry;
++	while (card < 0 && (entry = readdir(dir)) != NULL) {
++		int index;
++		if (sscanf(entry->d_name, "card%d-", &index) != 1)
++			continue;
++		char path[300];
++		char value[16];
++		snprintf(path, sizeof(path), "/sys/class/drm/%s/enabled",
++			entry->d_name);
++		if (vReadSysfs(path, value, sizeof(value))
++			&& strncmp(value, "enabled", 7) == 0)
++			card = index;
++	}
++	closedir(dir);
++	return card;
++}
++
++
++static bool
++vCardIsBootVga(int card)
++{
++	char path[64];
++	char value[8];
++	snprintf(path, sizeof(path), "/sys/class/drm/card%d/device/boot_vga",
++		card);
++	return vReadSysfs(path, value, sizeof(value)) && value[0] == '1';
++}
++
++
++static int
++vOpenRenderOf(int card)
++{
++	if (card < 0)
++		return -1;
++	char path[300];
++	snprintf(path, sizeof(path), "/sys/class/drm/card%d/device/drm", card);
++	DIR* dir = opendir(path);
 +	if (dir == NULL)
 +		return -1;
 +	int fd = -1;
-+	while (fd < 0) {
-+		struct dirent* entry = readdir(dir);
-+		if (entry == NULL)
-+			break;
++	struct dirent* entry;
++	while (fd < 0 && (entry = readdir(dir)) != NULL) {
 +		if (strncmp(entry->d_name, "renderD", 7) != 0)
 +			continue;
-+		char path[300];
 +		snprintf(path, sizeof(path), "/dev/dri/%s", entry->d_name);
 +		fd = open(path, O_RDWR | O_CLOEXEC);
 +	}
 +	closedir(dir);
++	return fd;
++}
++
++
++// The render node of the GPU that drives the display, so clients on that
++// GPU render in place and any other GPU is a cross-GPU (linear) client.
++static int
++vOpenRenderNode()
++{
++	int fd = vOpenRenderOf(vDisplayCard());
++	for (int card = 0; fd < 0 && card < 8; card++) {
++		if (vCardIsBootVga(card))
++			fd = vOpenRenderOf(card);
++	}
++	for (int card = 0; fd < 0 && card < 8; card++)
++		fd = vOpenRenderOf(card);
 +	return fd;
 +}
 +
@@ -6202,6 +6272,13 @@ new file mode 100644
 +	if (!dixRegisterPrivateKey(&sDmabufKey, PRIVATE_PIXMAP, sizeof(VDmabuf))
 +		|| !RegisterBlockAndWakeupHandlers(vDmabufBlock, vDmabufWakeup,
 +			NULL)) {
++		close(sRenderFd);
++		sRenderFd = -1;
++		return;
++	}
++
++	// FenceFromFD needs the shm fence screen funcs, else BadMatch.
++	if (!miSyncShmScreenInit(screen)) {
 +		close(sRenderFd);
 +		sRenderFd = -1;
 +		return;
