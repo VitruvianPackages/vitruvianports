@@ -921,7 +921,7 @@ diff --git a/hw/vitruvian/vInput.cpp b/hw/vitruvian/vInput.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInput.cpp
-@@ -0,0 +1,969 @@
+@@ -0,0 +1,995 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1257,6 +1257,32 @@ new file mode 100644
 +static int32 sSlaveCount = 0;
 +
 +
++// The compiled keymap carries zeroed controls (repeat rate, access
++// flags); keep the device's own so they survive the copy.
++static void
++vApplyKeymap(DeviceIntPtr dev, XkbDescPtr desc)
++{
++	XkbControlsPtr ctrls = dev->key->xkbInfo->desc->ctrls;
++	XkbControlsRec saved;
++	bool keep = ctrls != NULL;
++	if (keep)
++		saved = *ctrls;
++
++	XkbDeviceApplyKeymap(dev, desc);
++
++	ctrls = dev->key->xkbInfo->desc->ctrls;
++	if (keep && ctrls != NULL) {
++		saved.num_groups = ctrls->num_groups;
++		saved.groups_wrap = ctrls->groups_wrap;
++		*ctrls = saved;
++		if (ctrls->repeat_interval == 0)
++			ctrls->repeat_interval = 40;
++		if (ctrls->repeat_delay == 0)
++			ctrls->repeat_delay = 660;
++	}
++}
++
++
 +// Recompiles the keymap from the current V\OS layout and applies it to
 +// the master and every keyboard, so clients get a MappingNotify.
 +void
@@ -1272,11 +1298,11 @@ new file mode 100644
 +	if (desc == NULL)
 +		return;
 +
-+	XkbDeviceApplyKeymap(inputInfo.keyboard, desc);
++	vApplyKeymap(inputInfo.keyboard, desc);
 +	int32 count = atomic_get(&sSlaveCount);
 +	for (int32 i = 0; i < count; i++) {
 +		if (!sSlaves[i].pointer && sSlaves[i].device != NULL)
-+			XkbDeviceApplyKeymap(sSlaves[i].device, desc);
++			vApplyKeymap(sSlaves[i].device, desc);
 +	}
 +	XkbFreeKeyboard(desc, XkbAllComponentsMask, TRUE);
 +
