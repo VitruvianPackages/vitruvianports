@@ -10,6 +10,7 @@ repository.
 ```
 ports/
   apps/       native applications
+  linux-apps/ patched third-party Linux applications
   toolkits/   toolkit and library support (Qt platform plugins, SDL)
   x11/        X11 support
 ```
@@ -168,6 +169,12 @@ header: `Description` (a short subject, then the reason), `Author`,
 | weather | Weather forecast application for V\OS |
 | workspacenumber | Workspace number tray indicator for V\OS |
 | xcalc | XCalc calculator for V\OS |
+
+### Linux applications
+
+| Port | Description |
+|---|---|
+| gpu-viewer | Patched Debian package `gpu-viewer` |
 
 ### Toolkits
 

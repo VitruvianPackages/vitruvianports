@@ -1,0 +1,5 @@
+gpu-viewer (3.35+ds-2+vos1) unstable; urgency=medium
+
+  * Build tab contents on the main thread.
+
+ -- The Vitruvian Project <packages@v-os.dev>  Sat, 21 Nov 2026 12:00:00 +0000

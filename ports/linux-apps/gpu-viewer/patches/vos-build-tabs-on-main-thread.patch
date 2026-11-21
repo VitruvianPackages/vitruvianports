@@ -1,0 +1,28 @@
+Description: Build tab contents on the main thread.
+ GTK widgets were created in a worker thread; a GtkTextView built off the main
+ thread is laid out with a NULL default style and crashes. The probing thread
+ only runs commands and is left as is.
+Author: Numerio <b.vitruvio@gmail.com>
+Forwarded: not-needed
+Last-Update: 2026-11-21
+---
+--- a/Files/gpu_viewer.py
++++ b/Files/gpu_viewer.py
+@@ -576,12 +576,12 @@
+                 self._tab_built[page_name] = False
+ 
+             def _build_tab_async(page_name):
+-                """Run builder in a worker thread; reveal result on main thread."""
++                """Build on the main thread once the placeholder has been drawn."""
+                 builder = self._tab_builders[page_name]
+-                def _worker():
+-                    real_widget = builder()
+-                    GLib.idle_add(_reveal_content, page_name, real_widget)
+-                threading.Thread(target=_worker, daemon=True).start()
++                def _build():
++                    _reveal_content(page_name, builder())
++                    return False
++                GLib.idle_add(_build)
+ 
+             def _reveal_content(page_name, real_widget):
+                 """Swap spinner → real content inside the inner stack (main thread)."""
