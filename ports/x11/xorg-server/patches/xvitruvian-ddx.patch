@@ -1981,7 +1981,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,239 @@
+@@ -0,0 +1,241 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2104,6 +2104,8 @@ new file mode 100644
 +	bool		topLevel;
 +	bool		mapped;
 +	bool		dirty;
++	// Next flush uploads the whole window.
++	bool		refill;
 +	// Shows a client buffer in place of the window pixmap.
 +	bool		flipped;
 +	bool		fullscreen;
@@ -2615,7 +2617,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1555 @@
+@@ -0,0 +1,1553 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -3205,7 +3207,8 @@ new file mode 100644
 +			&& rects != NULL && nRects > 0) {
 +			// X drew over a client buffer: put its picture back first.
 +			const int flipped = VFlipRestore(priv, pWin, region);
-+			if (flipped == 1) {
++			if (flipped == 1 || priv->refill) {
++				priv->refill = false;
 +				BoxRec whole = { 0, 0, (short)pWin->drawable.width,
 +					(short)pWin->drawable.height };
 +				VUploadWindowRegion(priv, &whole, 1, pWin->drawable.x,
@@ -4084,12 +4087,9 @@ new file mode 100644
 +			sHandlerRegistered = true;
 +		}
 +
-+		// Initial content; later changes arrive through the damage list.
-+		VUploadWindowDamage(priv, pWin->drawable.x, pWin->drawable.y,
-+			pWin->drawable.x + pWin->drawable.width,
-+			pWin->drawable.y + pWin->drawable.height);
-+		if (priv->damage != NULL)
-+			DamageEmpty((DamagePtr)priv->damage);
++		// A new window pixmap is undefined: show nothing until the first
++		// damage, which then uploads the whole window.
++		priv->refill = true;
 +	}
 +
 +	return TRUE;
@@ -4167,9 +4167,9 @@ new file mode 100644
 +			(float)shownHeight - 1);
 +	}
 +
-+	// The buffer is reallocated for the new size; refill all of it.
-+	VUploadWindowDamage(priv, pWin->drawable.x, pWin->drawable.y,
-+		pWin->drawable.x + width, pWin->drawable.y + height);
++	// The buffers are reallocated empty and the exposed area is undefined:
++	// the client's redraw fills them, whole, at the next flush.
++	priv->refill = true;
 +}
 diff --git a/hw/vitruvian/xvitruvian-session.sh b/hw/vitruvian/xvitruvian-session.sh
 new file mode 100644
@@ -5939,7 +5939,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,847 @@
+@@ -0,0 +1,872 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -6238,7 +6238,7 @@ new file mode 100644
 +
 +// Present of a buffer that covers its window: the server shows it in place.
 +static Bool
-+vWindowFlip(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
++vWindowFlipShow(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
 +	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence)
 +{
 +	if (!sFlipEnabled || xOff != 0 || yOff != 0 || window->firstChild != NULL
@@ -6320,6 +6320,31 @@ new file mode 100644
 +	pending.since = vNow();
 +	priv->flipped = true;
 +	return TRUE;
++}
++
++
++// A declined flip is copied by Present right after. Wait for the client's
++// writes now: the per-loop read window predates this frame.
++static Bool
++vWindowFlip(WindowPtr window, PixmapPtr pixmap, RegionPtr update,
++	int16_t xOff, int16_t yOff, CARD32 serial, struct present_fence* fence)
++{
++	if (vWindowFlipShow(window, pixmap, update, xOff, yOff, serial, fence))
++		return TRUE;
++
++	VDmabuf* buf = vDmabuf(pixmap);
++	if (buf->fd > 0) {
++		if (buf->bo != NULL) {
++			if (buf->flipWindow == 0)
++				vBoRefresh(buf);
++		} else {
++			if (buf->syncing)
++				vDmabufSync(buf, DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ);
++			vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
++			buf->syncing = true;
++		}
++	}
++	return FALSE;
 +}
 +
 +
