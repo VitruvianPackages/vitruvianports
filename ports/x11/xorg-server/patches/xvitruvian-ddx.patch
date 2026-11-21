@@ -921,7 +921,7 @@ diff --git a/hw/vitruvian/vInput.cpp b/hw/vitruvian/vInput.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vInput.cpp
-@@ -0,0 +1,893 @@
+@@ -0,0 +1,907 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1479,6 +1479,13 @@ new file mode 100644
 +	switch (msg.what) {
 +		case B_MOUSE_MOVED:
 +		{
++			// Over a native window or the desktop no surface carries
++			// _view_token: keep that motion out of X unless a button or a
++			// grab holds the pointer for an X client.
++			if (!msg.HasInt32("_view_token") && sLastButtons == 0
++				&& (inputInfo.pointer == NULL
++					|| inputInfo.pointer->deviceGrab.grab == NULL))
++				return;
 +			// Every surface listens to all pointer motion; send each
 +			// position once.
 +			if (!hasWhere || where == sLastWhere)
@@ -1681,6 +1688,13 @@ new file mode 100644
 +
 +
 +void
++VBreakPopupGrabs()
++{
++	vBreakPopupGrabs();
++}
++
++
++void
 +VSetWindowFocus(uint32 windowId, bool activated)
 +{
 +	ScreenPtr pScreen = gVScreen;
@@ -1819,7 +1833,7 @@ diff --git a/hw/vitruvian/vPriv.h b/hw/vitruvian/vPriv.h
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vPriv.h
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,232 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2048,6 +2062,7 @@ new file mode 100644
 +void			VStopInputThread();
 +void			VDrainInputPort();
 +void			VSetWindowFocus(uint32 windowId, bool activated);
++void			VBreakPopupGrabs();
 +void			VHandleWindowInput(const BMessage& msg);
 +
 +#endif	// _V_PRIV_H
@@ -2446,7 +2461,7 @@ diff --git a/hw/vitruvian/vWindow.cpp b/hw/vitruvian/vWindow.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vWindow.cpp
-@@ -0,0 +1,1514 @@
+@@ -0,0 +1,1544 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -2834,6 +2849,25 @@ new file mode 100644
 +//	#pragma mark - surface events
 +
 +
++// X picks the pointer's window from its own stacking: keep the window under
++// the pointer above the other managed windows, below any popup.
++static void
++vRaiseForInput(WindowPtr pWin)
++{
++	if (pWin == NULL || pWin->overrideRedirect || pWin->parent == NULL)
++		return;
++
++	WindowPtr top = pWin->parent->firstChild;
++	while (top != NULL && (top->overrideRedirect || !top->mapped))
++		top = top->nextSib;
++	if (top == NULL || top == pWin)
++		return;
++
++	XID values[2] = { top->drawable.id, Above };
++	ConfigureWindow(pWin, CWSibling | CWStackMode, values, serverClient);
++}
++
++
 +// Runs on the server thread from the notify fd; nothing here needs a lock.
 +static void
 +vSurfaceNotify(int fd, int ready, void* data)
@@ -2865,6 +2899,12 @@ new file mode 100644
 +					int bw = wBorderWidth(pWin);
 +					XID values[2] = { (XID)((int32)where.x - bw - priv->csd[0]),
 +						(XID)((int32)where.y - bw - priv->csd[2]) };
++					// A move X did not ask for is a tab drag: it is the
++					// outside click a menu waits for.
++					if (!pWin->overrideRedirect
++						&& ((int32)values[0] != pWin->drawable.x - bw
++							|| (int32)values[1] != pWin->drawable.y - bw))
++						VBreakPopupGrabs();
 +					ConfigureWindow(pWin, CWX | CWY, values, wClient(pWin));
 +				}
 +				break;
@@ -2894,6 +2934,8 @@ new file mode 100644
 +				break;
 +			}
 +			case B_WINDOW_ACTIVATED:
++				if (event.GetBool("active", false))
++					vRaiseForInput(pWin);
 +				VSetWindowFocus(priv->xWindow,
 +					event.GetBool("active", false));
 +				break;
@@ -2937,6 +2979,9 @@ new file mode 100644
 +			case B_MOUSE_UP:
 +			case B_MOUSE_MOVED:
 +			case B_MOUSE_WHEEL_CHANGED:
++				if (event.what == B_MOUSE_MOVED
++					&& event.HasInt32("_view_token"))
++					vRaiseForInput(pWin);
 +				VHandleWindowInput(event);
 +				break;
 +			default:
