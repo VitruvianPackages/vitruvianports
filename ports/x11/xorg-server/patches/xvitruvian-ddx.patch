@@ -6684,9 +6684,9 @@ new file mode 100644
 +	buf->height = height;
 +	buf->flipWindow = 0;
 +	buf->syncing = false;
-+	if (own) {
-+		vBoRefresh(buf);
-+	} else {
++	// An INVALID buffer is the display GPU's own; a flip hands it over as is,
++	// so the detiled copy is made only when something reads the pixmap.
++	if (!own) {
 +		vDmabufSync(buf, DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ);
 +		buf->syncing = true;
 +	}
