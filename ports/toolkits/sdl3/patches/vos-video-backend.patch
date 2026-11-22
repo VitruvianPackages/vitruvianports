@@ -57,7 +57,7 @@ index f7c1528..d0ceb3f 100644
 +  list(APPEND VOS_CXX_FLAGS "-include" "LinuxBuildCompatibility.h")
 +  string(JOIN " " VOS_CXX_FLAGS ${VOS_CXX_FLAGS})
 +  target_compile_options(SDL3_vos PRIVATE "SHELL:${VOS_CXX_FLAGS}" -fvisibility=hidden)
-+  target_link_libraries(SDL3_vos PRIVATE SDL3-shared be root)
++  target_link_libraries(SDL3_vos PRIVATE SDL3-shared be root EGL)
 +  set_target_properties(SDL3_vos PROPERTIES PREFIX "" SUFFIX "" OUTPUT_NAME "libSDL3-vos.so.0")
 +  install(TARGETS SDL3_vos LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 +endif()
