@@ -6048,7 +6048,7 @@ diff --git a/hw/vitruvian/vDri3.cpp b/hw/vitruvian/vDri3.cpp
 new file mode 100644
 --- /dev/null
 +++ b/hw/vitruvian/vDri3.cpp
-@@ -0,0 +1,1141 @@
+@@ -0,0 +1,1140 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -7145,8 +7145,7 @@ new file mode 100644
 +
 +	sGbm = gbm_create_device(sRenderFd);
 +	vQueryModifiers();
-+	const char* noFlip = getenv("XVITR_NO_FLIP");
-+	sFlipEnabled = (noFlip == NULL || atoi(noFlip) == 0) && vPortsCarryFds();
++	sFlipEnabled = vPortsCarryFds();
 +
 +	// FenceFromFD needs the shm fence screen funcs, else BadMatch.
 +	if (!miSyncShmScreenInit(screen)) {
