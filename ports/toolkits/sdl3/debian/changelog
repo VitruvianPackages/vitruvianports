@@ -2,5 +2,7 @@ libsdl3 (3.4.20+ds-1vos1) unstable; urgency=medium
 
   * Native V\OS video backend on BSurface.
   * Cursor shapes, custom cursors and text clipboard.
+  * The backend is a module loaded on demand; libSDL3 no longer links libbe
+    and libroot.
 
  -- The Vitruvian Project <packages@v-os.dev>  Sat, 07 Nov 2026 12:00:00 +0000

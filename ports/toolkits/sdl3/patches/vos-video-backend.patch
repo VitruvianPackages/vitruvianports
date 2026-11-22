@@ -1,7 +1,8 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f7c1528..d0ceb3f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -3000,6 +3000,37 @@ endif()
+@@ -3536,6 +3536,29 @@ endif()
  
  # Platform-independent options
  
@@ -18,17 +19,9 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 +  if(VOS_SURFACE_DIR AND VOS_PC_FOUND)
 +    enable_language(CXX)
 +    set(SDL_VIDEO_DRIVER_VOS 1)
-+    sdl_glob_sources("${SDL3_SOURCE_DIR}/src/video/vos/*.cc")
++    set(SDL_VOS_MODULE TRUE)
++    sdl_glob_sources("${SDL3_SOURCE_DIR}/src/video/vos/*.c")
 +    get_filename_component(VOS_PRIVATE_DIR "${VOS_SURFACE_DIR}" DIRECTORY)
-+    set(VOS_CXX_FLAGS)
-+    foreach(dir "${VOS_PRIVATE_DIR}" "${VOS_PRIVATE_DIR}/app" "${VOS_PRIVATE_DIR}/interface"
-+                "${VOS_PRIVATE_DIR}/shared" "${VOS_PRIVATE_DIR}/system" ${VOS_PC_INCLUDE_DIRS})
-+      list(APPEND VOS_CXX_FLAGS "-isystem" "${dir}")
-+    endforeach()
-+    list(APPEND VOS_CXX_FLAGS "-include" "LinuxBuildCompatibility.h")
-+    string(JOIN " " VOS_CXX_FLAGS ${VOS_CXX_FLAGS})
-+    sdl_compile_options(PRIVATE NO_EXPORT "$<$<COMPILE_LANGUAGE:CXX>:SHELL:${VOS_CXX_FLAGS}>")
-+    sdl_link_dependency(vos LIBS be root)
 +    set(HAVE_SDL_VIDEO TRUE)
 +    message(STATUS "V\\OS video backend: enabled (${VOS_SURFACE_DIR})")
 +  else()
@@ -39,10 +32,40 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  if(SDL_VIDEO)
    if(SDL_OFFSCREEN)
      set(SDL_VIDEO_DRIVER_OFFSCREEN 1)
+@@ -4390,3 +4413,28 @@ string(APPEND CMAKE_OBJC_FLAGS " ${CMAKE_C_FLAGS}")
+ 
+ SDL_PrintSummary()
+ debug_show_sdl_deps()
++
++# The V\OS backend links libbe, so it is a module loaded on demand rather than
++# part of libSDL3.
++if(SDL_VOS_MODULE AND SDL_SHARED)
++  add_library(SDL3_vos MODULE
++    "${SDL3_SOURCE_DIR}/src/video/vos/SDL_vosvideo.cc"
++    "${SDL3_SOURCE_DIR}/src/video/vos/SDL_vosopengl.cc")
++  add_dependencies(SDL3_vos SDL3-shared)
++  target_compile_definitions(SDL3_vos PRIVATE SDL_VOS_MODULE_BUILD=1)
++  target_include_directories(SDL3_vos PRIVATE
++    "${SDL3_SOURCE_DIR}/src" "${SDL3_SOURCE_DIR}/include"
++    "${SDL3_BINARY_DIR}/include-config-$<LOWER_CASE:$<CONFIG>>/build_config")
++  target_include_directories(SDL3_vos SYSTEM PRIVATE "${SDL3_SOURCE_DIR}/src/video/khronos")
++  set(VOS_CXX_FLAGS)
++  foreach(dir "${VOS_PRIVATE_DIR}" "${VOS_PRIVATE_DIR}/app" "${VOS_PRIVATE_DIR}/interface"
++              "${VOS_PRIVATE_DIR}/shared" "${VOS_PRIVATE_DIR}/system" ${VOS_PC_INCLUDE_DIRS})
++    list(APPEND VOS_CXX_FLAGS "-isystem" "${dir}")
++  endforeach()
++  list(APPEND VOS_CXX_FLAGS "-include" "LinuxBuildCompatibility.h")
++  string(JOIN " " VOS_CXX_FLAGS ${VOS_CXX_FLAGS})
++  target_compile_options(SDL3_vos PRIVATE "SHELL:${VOS_CXX_FLAGS}" -fvisibility=hidden)
++  target_link_libraries(SDL3_vos PRIVATE SDL3-shared be root)
++  set_target_properties(SDL3_vos PROPERTIES PREFIX "" SUFFIX "" OUTPUT_NAME "libSDL3-vos.so.0")
++  install(TARGETS SDL3_vos LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
++endif()
 diff --git a/include/build_config/SDL_build_config.h.cmake b/include/build_config/SDL_build_config.h.cmake
+index d7bb97b..4210ab5 100644
 --- a/include/build_config/SDL_build_config.h.cmake
 +++ b/include/build_config/SDL_build_config.h.cmake
-@@ -361,6 +361,7 @@
+@@ -404,6 +404,7 @@
  #cmakedefine SDL_VIDEO_DRIVER_EMSCRIPTEN 1
  #cmakedefine SDL_VIDEO_DRIVER_HAIKU 1
  #cmakedefine SDL_VIDEO_DRIVER_KMSDRM 1
@@ -50,10 +73,24 @@ diff --git a/include/build_config/SDL_build_config.h.cmake b/include/build_confi
  #cmakedefine SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC @SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC@
  #cmakedefine SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM @SDL_VIDEO_DRIVER_KMSDRM_DYNAMIC_GBM@
  #cmakedefine SDL_VIDEO_DRIVER_N3DS 1
+diff --git a/src/dynapi/SDL_dynapi.h b/src/dynapi/SDL_dynapi.h
+index 786d86e..5af57fe 100644
+--- a/src/dynapi/SDL_dynapi.h
++++ b/src/dynapi/SDL_dynapi.h
+@@ -59,6 +59,8 @@
+ #define SDL_DYNAMIC_API 0
+ #elif defined(__clang_analyzer__) || defined(__INTELLISENSE__) || defined(SDL_THREAD_SAFETY_ANALYSIS) || defined(__RESHARPER__)
+ #define SDL_DYNAMIC_API 0 // Turn off for static analysis, so reports are more clear.
++#elif defined(SDL_VOS_MODULE_BUILD)
++#define SDL_DYNAMIC_API 0 // the V\OS backend module calls the exported API directly
+ #elif defined(SDL_PLATFORM_VITA)
+ #define SDL_DYNAMIC_API 0 // vitasdk doesn't support dynamic linking
+ #elif defined(SDL_PLATFORM_3DS)
 diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
+index 4cd1ee5..84f8592 100644
 --- a/src/video/SDL_sysvideo.h
 +++ b/src/video/SDL_sysvideo.h
-@@ -515,6 +515,7 @@ extern VideoBootStrap COCOA_bootstrap;
+@@ -528,6 +528,7 @@ extern VideoBootStrap COCOA_bootstrap;
  extern VideoBootStrap X11_bootstrap;
  extern VideoBootStrap WINDOWS_bootstrap;
  extern VideoBootStrap HAIKU_bootstrap;
@@ -62,9 +99,10 @@ diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
  extern VideoBootStrap Android_bootstrap;
  extern VideoBootStrap PS2_bootstrap;
 diff --git a/src/video/SDL_video.c b/src/video/SDL_video.c
+index 8d8002f..ce74c5e 100644
 --- a/src/video/SDL_video.c
 +++ b/src/video/SDL_video.c
-@@ -83,6 +83,9 @@ static VideoBootStrap *bootstrap[] = {
+@@ -92,6 +92,9 @@ static VideoBootStrap *bootstrap[] = {
  #ifdef SDL_VIDEO_DRIVER_COCOA
      &COCOA_bootstrap,
  #endif
@@ -74,7 +112,62 @@ diff --git a/src/video/SDL_video.c b/src/video/SDL_video.c
  #ifdef SDL_VIDEO_DRIVER_X11
  #ifdef SDL_VIDEO_DRIVER_WAYLAND
      &Wayland_preferred_bootstrap,
+diff --git a/src/video/vos/SDL_vosapi.h b/src/video/vos/SDL_vosapi.h
+new file mode 100644
+index 0000000..eb18d4b
+--- /dev/null
++++ b/src/video/vos/SDL_vosapi.h
+@@ -0,0 +1,47 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++#ifndef SDL_vosapi_h_
++#define SDL_vosapi_h_
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++#include "../SDL_sysvideo.h"
++#include "../../events/SDL_events_c.h"
++#include "../../events/SDL_keyboard_c.h"
++#include "../../events/SDL_mouse_c.h"
++#include "../../events/SDL_scancode_tables_c.h"
++#include "../../events/SDL_windowevents_c.h"
++
++// The V\OS backend is a module that links libbe, loaded on demand. These are
++// the core internals it needs, which libSDL3 does not export.
++typedef struct VOS_HostAPI
++{
++    __typeof__(&SDL_AddBasicVideoDisplay) AddBasicVideoDisplay;
++    __typeof__(&SDL_AddKeyboard) AddKeyboard;
++    __typeof__(&SDL_AddMouse) AddMouse;
++    __typeof__(&SDL_GetMouse) GetMouse;
++    __typeof__(&SDL_GetScancodeFromTable) GetScancodeFromTable;
++    __typeof__(&SDL_GetVideoDevice) GetVideoDevice;
++    __typeof__(&SDL_GetVideoDisplay) GetVideoDisplay;
++    __typeof__(&SDL_SendKeyboardKey) SendKeyboardKey;
++    __typeof__(&SDL_SendKeyboardText) SendKeyboardText;
++    __typeof__(&SDL_SendMouseButton) SendMouseButton;
++    __typeof__(&SDL_SendMouseMotion) SendMouseMotion;
++    __typeof__(&SDL_SendMouseWheel) SendMouseWheel;
++    __typeof__(&SDL_SendWindowEvent) SendWindowEvent;
++    __typeof__(&SDL_SetDefaultCursor) SetDefaultCursor;
++    __typeof__(&SDL_SetDesktopDisplayMode) SetDesktopDisplayMode;
++    __typeof__(&SDL_SetKeyboardFocus) SetKeyboardFocus;
++    __typeof__(&SDL_SetMouseFocus) SetMouseFocus;
++} VOS_HostAPI;
++
++typedef SDL_VideoDevice *(*VOS_ModuleCreateFunc)(const VOS_HostAPI *api);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
 diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
+new file mode 100644
+index 0000000..99d78b2
 --- /dev/null
 +++ b/src/video/vos/SDL_vosopengl.cc
 @@ -0,0 +1,351 @@
@@ -429,10 +522,78 @@ diff --git a/src/video/vos/SDL_vosopengl.cc b/src/video/vos/SDL_vosopengl.cc
 +#else
 +// Without EGL there is no GL path.
 +#endif
+diff --git a/src/video/vos/SDL_vosstub.c b/src/video/vos/SDL_vosstub.c
+new file mode 100644
+index 0000000..3f645d3
+--- /dev/null
++++ b/src/video/vos/SDL_vosstub.c
+@@ -0,0 +1,60 @@
++/*
++ * Copyright 2026, Dario Casalinuovo. All rights reserved.
++ * Distributed under the terms of the MIT License.
++ */
++#include "SDL_internal.h"
++
++#ifdef SDL_VIDEO_DRIVER_VOS
++
++#include <unistd.h>
++
++#include "SDL_vosapi.h"
++
++// libbe and libroot stay out of libSDL3's dependencies; the backend module
++// pulls them in, and only where the V\OS kernel interface is present.
++
++static void *VOS_module;
++
++static SDL_VideoDevice *VOS_CreateDevice(void)
++{
++    static const VOS_HostAPI api = {
++        SDL_AddBasicVideoDisplay,
++        SDL_AddKeyboard,
++        SDL_AddMouse,
++        SDL_GetMouse,
++        SDL_GetScancodeFromTable,
++        SDL_GetVideoDevice,
++        SDL_GetVideoDisplay,
++        SDL_SendKeyboardKey,
++        SDL_SendKeyboardText,
++        SDL_SendMouseButton,
++        SDL_SendMouseMotion,
++        SDL_SendMouseWheel,
++        SDL_SendWindowEvent,
++        SDL_SetDefaultCursor,
++        SDL_SetDesktopDisplayMode,
++        SDL_SetKeyboardFocus,
++        SDL_SetMouseFocus,
++    };
++
++    if (access("/dev/nexus", R_OK | W_OK) != 0) {
++        return NULL;
++    }
++    if (!VOS_module) {
++        VOS_module = SDL_LoadObject("libSDL3-vos.so.0");
++        if (!VOS_module) {
++            return NULL;
++        }
++    }
++    VOS_ModuleCreateFunc create = (VOS_ModuleCreateFunc)SDL_LoadFunction(VOS_module, "VOS_ModuleCreate");
++    return create ? create(&api) : NULL;
++}
++
++VideoBootStrap VOS_bootstrap = {
++    "vos", "V\\OS graphics",
++    VOS_CreateDevice,
++    NULL,
++    false
++};
++
++#endif // SDL_VIDEO_DRIVER_VOS
 diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
+new file mode 100644
+index 0000000..3b048b6
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.cc
-@@ -0,0 +1,995 @@
+@@ -0,0 +1,990 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -466,11 +627,6 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +extern "C" {
 +#include "../SDL_sysvideo.h"
 +#include "../SDL_pixels_c.h"
-+#include "../../events/SDL_events_c.h"
-+#include "../../events/SDL_keyboard_c.h"
-+#include "../../events/SDL_mouse_c.h"
-+#include "../../events/SDL_scancode_tables_c.h"
-+#include "../../events/SDL_windowevents_c.h"
 +}
 +#include "SDL_vosvideo.h"
 +
@@ -1418,20 +1574,22 @@ diff --git a/src/video/vos/SDL_vosvideo.cc b/src/video/vos/SDL_vosvideo.cc
 +    return device;
 +}
 +
-+extern "C" {
-+VideoBootStrap VOS_bootstrap = {
-+    "vos", "V\\OS graphics",
-+    VOS_CreateDevice,
-+    NULL,
-+    false
-+};
++const VOS_HostAPI *VOS_host;
++
++extern "C" __attribute__((visibility("default")))
++SDL_VideoDevice *VOS_ModuleCreate(const VOS_HostAPI *api)
++{
++    VOS_host = api;
++    return VOS_CreateDevice();
 +}
 +
 +#endif // SDL_VIDEO_DRIVER_VOS
 diff --git a/src/video/vos/SDL_vosvideo.h b/src/video/vos/SDL_vosvideo.h
+new file mode 100644
+index 0000000..0608978
 --- /dev/null
 +++ b/src/video/vos/SDL_vosvideo.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,93 @@
 +/*
 + * Copyright 2026, Dario Casalinuovo. All rights reserved.
 + * Distributed under the terms of the MIT License.
@@ -1440,6 +1598,7 @@ diff --git a/src/video/vos/SDL_vosvideo.h b/src/video/vos/SDL_vosvideo.h
 +#define SDL_vosvideo_h_
 +
 +#include "../SDL_sysvideo.h"
++#include "SDL_vosapi.h"
 +
 +struct SDL_VideoData
 +{
@@ -1501,5 +1660,26 @@ diff --git a/src/video/vos/SDL_vosvideo.h b/src/video/vos/SDL_vosvideo.h
 +#ifdef __cplusplus
 +}
 +#endif
++
++
++// Core internals come through the host table.
++extern const VOS_HostAPI *VOS_host;
++#define SDL_AddBasicVideoDisplay VOS_host->AddBasicVideoDisplay
++#define SDL_AddKeyboard VOS_host->AddKeyboard
++#define SDL_AddMouse VOS_host->AddMouse
++#define SDL_GetMouse VOS_host->GetMouse
++#define SDL_GetScancodeFromTable VOS_host->GetScancodeFromTable
++#define SDL_GetVideoDevice VOS_host->GetVideoDevice
++#define SDL_GetVideoDisplay VOS_host->GetVideoDisplay
++#define SDL_SendKeyboardKey VOS_host->SendKeyboardKey
++#define SDL_SendKeyboardText VOS_host->SendKeyboardText
++#define SDL_SendMouseButton VOS_host->SendMouseButton
++#define SDL_SendMouseMotion VOS_host->SendMouseMotion
++#define SDL_SendMouseWheel VOS_host->SendMouseWheel
++#define SDL_SendWindowEvent VOS_host->SendWindowEvent
++#define SDL_SetDefaultCursor VOS_host->SetDefaultCursor
++#define SDL_SetDesktopDisplayMode VOS_host->SetDesktopDisplayMode
++#define SDL_SetKeyboardFocus VOS_host->SetKeyboardFocus
++#define SDL_SetMouseFocus VOS_host->SetMouseFocus
 +
 +#endif

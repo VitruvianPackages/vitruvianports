@@ -27,3 +27,8 @@
  execute_after_dh_auto_build:
  ifneq ($(filter %-doc,$(built_binaries)),)
  	sed -e 's/FULL_PATH_NAMES *=.*/FULL_PATH_NAMES = NO/' < docs/doxyfile > debian/Doxyfile
+--- a/debian/libsdl3-0.install
++++ b/debian/libsdl3-0.install
+@@ -1 +1,2 @@
+ usr/lib/*/libSDL3.so.0*
++usr/lib/*/libSDL3-vos.so.0
