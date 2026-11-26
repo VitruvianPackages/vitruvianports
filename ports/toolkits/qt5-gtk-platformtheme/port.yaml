@@ -1,4 +1,4 @@
 repack: qt5-gtk-platformtheme
-version: 5.15.19+dfsg-7
+version: 5.15.19+dfsg-8
 version-trixie: 5.15.15+dfsg-6+deb13u1
 recommends: qt5-vos-plugin
