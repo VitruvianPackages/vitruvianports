@@ -50,6 +50,17 @@ diff -urN a/debian/control b/debian/control
 diff -urN a/debian/rules b/debian/rules
 --- a/debian/rules
 +++ b/debian/rules
+@@ -1,7 +1,10 @@
+ #!/usr/bin/make -f
+ 
+ include debian/rules.flags
++
++# the aarch64 cross compiler flags a false bound in the Xtrans hostname strncpy
++export DEB_CFLAGS_MAINT_APPEND = -Wno-error=array-bounds
+ 
+ include /usr/share/dpkg/architecture.mk
+ 
+ ifeq ($(DEB_HOST_ARCH_OS), linux)
 @@ -46,7 +46,5 @@
  override_dh_auto_test:
  ifeq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
