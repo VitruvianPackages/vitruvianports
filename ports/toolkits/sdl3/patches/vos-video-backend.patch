@@ -77,15 +77,17 @@ diff --git a/src/dynapi/SDL_dynapi.h b/src/dynapi/SDL_dynapi.h
 index 786d86e..5af57fe 100644
 --- a/src/dynapi/SDL_dynapi.h
 +++ b/src/dynapi/SDL_dynapi.h
-@@ -59,6 +59,8 @@
+@@ -43,7 +43,9 @@
+ #include "TargetConditionals.h"
+ #endif
+ 
+-#if defined(SDL_PLATFORM_PRIVATE) // probably not useful on private platforms.
++#if defined(SDL_VOS_MODULE_BUILD) // the V\OS backend module calls the exported API directly
++#define SDL_DYNAMIC_API 0
++#elif defined(SDL_PLATFORM_PRIVATE) // probably not useful on private platforms.
  #define SDL_DYNAMIC_API 0
- #elif defined(__clang_analyzer__) || defined(__INTELLISENSE__) || defined(SDL_THREAD_SAFETY_ANALYSIS) || defined(__RESHARPER__)
- #define SDL_DYNAMIC_API 0 // Turn off for static analysis, so reports are more clear.
-+#elif defined(SDL_VOS_MODULE_BUILD)
-+#define SDL_DYNAMIC_API 0 // the V\OS backend module calls the exported API directly
- #elif defined(SDL_PLATFORM_VITA)
- #define SDL_DYNAMIC_API 0 // vitasdk doesn't support dynamic linking
- #elif defined(SDL_PLATFORM_3DS)
+ #elif defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE // probably not useful on iOS.
+ #define SDL_DYNAMIC_API 0
 diff --git a/src/video/SDL_sysvideo.h b/src/video/SDL_sysvideo.h
 index 4cd1ee5..84f8592 100644
 --- a/src/video/SDL_sysvideo.h
